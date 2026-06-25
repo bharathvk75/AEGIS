@@ -145,7 +145,7 @@ class LMStudioClient(BaseLLMClient):
     
     def is_available(self) -> bool:
         try:
-            resp = self.client.get('/models')
+            resp = self.client.get(f"{self.endpoint}/models")
             self._connected = resp.status_code == 200
             return self._connected
         except Exception:
@@ -154,7 +154,7 @@ class LMStudioClient(BaseLLMClient):
     
     def get_models(self) -> List[Dict[str, Any]]:
         try:
-            resp = self.client.get('/models')
+            resp = self.client.get(f"{self.endpoint}/models")
             if resp.status_code == 200:
                 data = resp.json()
                 return [{'name': m.get('id', 'unknown'), 'size': 0} for m in data.get('data', [])]
@@ -222,7 +222,7 @@ class OpenAIClient(BaseLLMClient):
     
     def is_available(self) -> bool:
         try:
-            resp = self.client.get('/models')
+            resp = self.client.get(f"{self.endpoint}/models")
             self._connected = resp.status_code == 200
             return self._connected
         except Exception:
@@ -231,7 +231,7 @@ class OpenAIClient(BaseLLMClient):
     
     def get_models(self) -> List[Dict[str, Any]]:
         try:
-            resp = self.client.get('/models')
+            resp = self.client.get(f"{self.endpoint}/models")
             if resp.status_code == 200:
                 data = resp.json()
                 return [{'name': m.get('id', 'unknown'), 'size': 0} for m in data.get('data', [])]
@@ -464,6 +464,10 @@ class LLMManager:
             session.close()
         except Exception as e:
             print(f"Error loading external models from database: {e}")
+    
+    def reload_clients(self):
+        self._clients.clear()
+        self._init_clients()
     
     def get_client(self, provider: str = 'ollama') -> Optional[BaseLLMClient]:
         return self._clients.get(provider.lower())

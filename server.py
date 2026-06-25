@@ -65,6 +65,7 @@ class ModelConfig(BaseModel):
     enabled: bool = True
     default_model: Optional[str] = None
     api_key: Optional[str] = None
+    endpoint: Optional[str] = None
 
 class ChannelCreate(BaseModel):
     name: str
@@ -370,20 +371,36 @@ def get_camera_stream(id: int):
 def list_models():
     # Expose current AI config
     config = get_config()
+    from core.ai.llm_clients import get_llm_manager
+    manager = get_llm_manager()
+    clients_connected = manager.check_all_connected()
+    
+    providers = config.get("external_ai.providers", [])
+    external_providers = []
+    for prov in providers:
+        name_lower = prov.get('name', '').lower()
+        external_providers.append({
+            "name": prov.get('name'),
+            "endpoint": prov.get('endpoint'),
+            "default_model": prov.get('default_model'),
+            "enabled": prov.get('enabled', True),
+            "has_key": bool(prov.get('api_key')),
+            "connected": clients_connected.get(name_lower, False)
+        })
+        
     return {
         "ollama": {
             "host": config.get("ollama.host"),
             "default_model": config.get("ollama.default_model"),
-            "enabled": True
+            "enabled": True,
+            "connected": clients_connected.get("ollama", False)
         },
         "lmstudio": {
             "host": config.get("lmstudio.host"),
-            "enabled": config.get("lmstudio.enabled", False)
+            "enabled": config.get("lmstudio.enabled", False),
+            "connected": clients_connected.get("lmstudio", False)
         },
-        "gemini": {
-            "enabled": config.get("external_ai.enabled", False),
-            "has_key": bool(config.get("external_ai.providers")) or bool(os.getenv("GEMINI_API_KEY"))
-        }
+        "external_providers": external_providers
     }
 
 @app.post("/api/models/connect")
@@ -392,20 +409,44 @@ def connect_model(config_data: ModelConfig):
     provider = config_data.provider.lower()
     
     try:
-        if provider == "ollama":
-            if config_data.host:
-                config.set("ollama.host", config_data.host)
-            if config_data.default_model:
-                config.set("ollama.default_model", config_data.default_model)
-        elif provider == "lmstudio":
-            if config_data.host:
-                config.set("lmstudio.host", config_data.host)
-            config.set("lmstudio.enabled", config_data.enabled)
-        elif provider == "gemini":
-            if config_data.api_key:
-                # Save the new Gemini API key
-                os.environ["GEMINI_API_KEY"] = config_data.api_key
-                config.set("external_ai.enabled", True)
+        if provider in ("ollama", "lmstudio"):
+            if provider == "ollama":
+                if config_data.host:
+                    config.set("ollama.host", config_data.host)
+                if config_data.default_model:
+                    config.set("ollama.default_model", config_data.default_model)
+            elif provider == "lmstudio":
+                if config_data.host:
+                    config.set("lmstudio.host", config_data.host)
+                config.set("lmstudio.enabled", config_data.enabled)
+        else:
+            # External provider (Gemini, OpenAI, Anthropic, DeepSeek, OpenRouter, etc.)
+            providers = config.get("external_ai.providers", [])
+            found = False
+            for prov in providers:
+                if prov.get('name', '').lower() == provider:
+                    if config_data.api_key:
+                        prov['api_key'] = config_data.api_key
+                    if config_data.endpoint:
+                        prov['endpoint'] = config_data.endpoint
+                    if config_data.default_model:
+                        prov['default_model'] = config_data.default_model
+                    prov['enabled'] = config_data.enabled
+                    found = True
+                    break
+                    
+            if not found:
+                new_prov = {
+                    "name": config_data.provider,
+                    "api_key": config_data.api_key or "",
+                    "endpoint": config_data.endpoint or "",
+                    "default_model": config_data.default_model or "",
+                    "enabled": config_data.enabled
+                }
+                providers.append(new_prov)
+                
+            config.set("external_ai.providers", providers)
+            config.set("external_ai.enabled", True)
                 
         # Trigger manager client check
         from core.ai.llm_clients import get_llm_manager
