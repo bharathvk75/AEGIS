@@ -41,9 +41,69 @@ class TelegramChannel(NotificationChannel):
         self.bot_token = config.get('bot_token', '')
         self.chat_id = config.get('chat_id', '')
     
+    async def _resolve_username_if_needed(self) -> bool:
+        """Helper to resolve Telegram username to numeric chat ID using getUpdates."""
+        chat_id_str = str(self.chat_id).strip()
+        if not chat_id_str:
+            return False
+        
+        # A username starts with @ or contains letters/underscores
+        is_username = chat_id_str.startswith('@') or any(c.isalpha() for c in chat_id_str)
+        if not is_username:
+            return True # Already a numeric chat ID
+            
+        username = chat_id_str.lstrip('@').lower()
+        try:
+            import httpx
+            print(f"[Telegram] Attempting to resolve username '@{username}' to numeric Chat ID...")
+            url_updates = f'https://api.telegram.org/bot{self.bot_token}/getUpdates'
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url_updates, timeout=10.0)
+                if resp.status_code == 200:
+                    updates_data = resp.json()
+                    if updates_data.get('ok'):
+                        for update in updates_data.get('result', []):
+                            msg = update.get('message') or update.get('edited_message') or update.get('channel_post')
+                            if not msg:
+                                continue
+                            
+                            from_user = msg.get('from', {})
+                            from_username = from_user.get('username', '')
+                            
+                            if from_username and from_username.lower() == username:
+                                resolved_chat_id = msg.get('chat', {}).get('id')
+                                if resolved_chat_id:
+                                    print(f"[Telegram] Resolved username '{username}' to Chat ID: {resolved_chat_id}")
+                                    self.chat_id = str(resolved_chat_id)
+                                    self.config['chat_id'] = str(resolved_chat_id)
+                                    
+                                    # Persist to database
+                                    channel_db_id = self.config.get('id')
+                                    if channel_db_id:
+                                        try:
+                                            from core.storage.database import get_db, NotificationChannel as DBChannel
+                                            db = get_db()
+                                            session = db.get_session()
+                                            db_channel = session.query(DBChannel).filter_by(id=channel_db_id).first()
+                                            if db_channel:
+                                                import json
+                                                cfg = db_channel.config
+                                                cfg['chat_id'] = str(resolved_chat_id)
+                                                db_channel.config_json = json.dumps(cfg)
+                                                session.commit()
+                                            session.close()
+                                        except Exception as db_err:
+                                            print(f"[Telegram] Error saving resolved Chat ID to DB: {db_err}")
+                                    return True
+            return False
+        except Exception as e:
+            print(f"[Telegram] Error during username resolution: {e}")
+            return False
+
     async def send(self, message: Dict[str, Any], event_data: Dict[str, Any]) -> bool:
         try:
             import httpx
+            await self._resolve_username_if_needed()
             text = self._format_message(message, event_data)
             url = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
             payload = {
@@ -62,7 +122,7 @@ class TelegramChannel(NotificationChannel):
             self.increment_failed()
             return False
     
-    async def test(self) -> bool:
+    async def test(self) -> tuple[bool, str]:
         try:
             import httpx
             # 1. Verify the bot token is valid
@@ -70,25 +130,42 @@ class TelegramChannel(NotificationChannel):
             async with httpx.AsyncClient() as client:
                 resp_me = await client.get(url_me, timeout=5.0)
                 if resp_me.status_code != 200:
-                    print(f"[Telegram-Test] Bot token check failed. Status: {resp_me.status_code}, Response: {resp_me.text}")
-                    return False
+                    err_msg = f"Bot token check failed (status: {resp_me.status_code})."
+                    print(f"[Telegram-Test] {err_msg}")
+                    return False, f"Invalid Bot Token. Telegram API returned: {resp_me.text}"
                 
-                # 2. Try sending a test message to verify the chat_id and that the conversation has started
-                if self.chat_id:
-                    url_send = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
-                    payload = {
-                        'chat_id': self.chat_id,
-                        'text': '🧪 <b>AEGIS Notification Test</b>\n\nYour Telegram alert channel is configured and delivering successfully.',
-                        'parse_mode': 'HTML'
-                    }
-                    resp_send = await client.post(url_send, json=payload, timeout=10.0)
-                    if resp_send.status_code != 200:
-                        print(f"[Telegram-Test] sendMessage failed for chat_id: {self.chat_id}. Status: {resp_send.status_code}, Response: {resp_send.text}")
-                        return False
-            return True
+                # 2. Resolve username if username was provided
+                chat_id_str = str(self.chat_id).strip()
+                if not chat_id_str:
+                    return False, "Chat ID or Username is missing."
+                
+                is_username = chat_id_str.startswith('@') or any(c.isalpha() for c in chat_id_str)
+                if is_username:
+                    resolved = await self._resolve_username_if_needed()
+                    if not resolved:
+                        username = chat_id_str.lstrip('@')
+                        return False, (
+                            f"Could not find any recent message from Telegram username '@{username}'. "
+                            "You MUST send a message (e.g. '/start') to the bot in Telegram first, "
+                            "so the bot can discover your Chat ID."
+                        )
+                
+                # 3. Try sending a test message to verify the chat_id
+                url_send = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
+                payload = {
+                    'chat_id': self.chat_id,
+                    'text': '🧪 <b>AEGIS Notification Test</b>\n\nYour Telegram alert channel is configured and delivering successfully.',
+                    'parse_mode': 'HTML'
+                }
+                resp_send = await client.post(url_send, json=payload, timeout=10.0)
+                if resp_send.status_code != 200:
+                    err_msg = f"sendMessage failed. Status: {resp_send.status_code}, Response: {resp_send.text}"
+                    print(f"[Telegram-Test] {err_msg}")
+                    return False, f"Failed to send message: {resp_send.text}. Verify that you have messaged the bot first."
+            return True, "Test message sent successfully. Check your Telegram!"
         except Exception as e:
             print(f"[Telegram-Test] Error testing Telegram bot: {e}")
-            return False
+            return False, f"Internal error testing Telegram bot: {str(e)}"
     
     def _format_message(self, message: Dict[str, Any], event_data: Dict[str, Any]) -> str:
         template = self.config.get('template', 
@@ -142,16 +219,17 @@ class DiscordChannel(NotificationChannel):
             self.increment_failed()
             return False
     
-    async def test(self) -> bool:
+    async def test(self) -> tuple[bool, str]:
         try:
             import httpx
             payload = {'content': '🧪 AEGIS Test Message'}
             async with httpx.AsyncClient() as client:
                 resp = await client.post(self.webhook_url, json=payload, timeout=5.0)
-                return resp.status_code in (200, 204)
-        except Exception:
-
-            return False
+                if resp.status_code in (200, 204):
+                    return True, "Test message delivered to Discord successfully."
+                return False, f"Discord webhook returned status code {resp.status_code}."
+        except Exception as e:
+            return False, f"Failed to connect to Discord: {str(e)}"
 
 
 class WebhookChannel(NotificationChannel):
@@ -179,15 +257,16 @@ class WebhookChannel(NotificationChannel):
             self.increment_failed()
             return False
     
-    async def test(self) -> bool:
+    async def test(self) -> tuple[bool, str]:
         try:
             import httpx
             async with httpx.AsyncClient() as client:
                 resp = await client.request(self.method, self.url, timeout=5.0)
-                return resp.status_code < 400
-        except Exception:
-
-            return False
+                if resp.status_code < 400:
+                    return True, f"Webhook test succeeded. Response status: {resp.status_code}."
+                return False, f"Webhook returned status code {resp.status_code}."
+        except Exception as e:
+            return False, f"Webhook connection failed: {str(e)}"
     
     def _build_body(self, event_data: Dict[str, Any]) -> Dict:
         if callable(self.body_template):
@@ -226,15 +305,16 @@ class SMSChannel(NotificationChannel):
             self.increment_failed()
             return False
     
-    async def test(self) -> bool:
+    async def test(self) -> tuple[bool, str]:
         try:
             from twilio.rest import Client
             client = Client(self.account_sid, self.auth_token)
-            client.messages.create(body='AEGIS Test', from_=self.from_number, to=self.to_number)
-            return True
-        except Exception:
-
-            return False
+            msg = client.messages.create(body='AEGIS SMS Test', from_=self.from_number, to=self.to_number)
+            if msg.sid:
+                return True, "SMS test message dispatched via Twilio."
+            return False, "Twilio accepted the request but did not return a valid Message SID."
+        except Exception as e:
+            return False, f"Twilio SMS error: {str(e)}"
 
 
 class WhatsAppChannel(NotificationChannel):
@@ -261,15 +341,16 @@ class WhatsAppChannel(NotificationChannel):
             self.increment_failed()
             return False
     
-    async def test(self) -> bool:
+    async def test(self) -> tuple[bool, str]:
         try:
             from twilio.rest import Client
             client = Client(self.account_sid, self.auth_token)
-            client.messages.create(body='AEGIS WhatsApp Test', from_=f'whatsapp:{self.from_number}', to=f'whatsapp:{self.to_number}')
-            return True
-        except Exception:
-
-            return False
+            msg = client.messages.create(body='AEGIS WhatsApp Test', from_=f'whatsapp:{self.from_number}', to=f'whatsapp:{self.to_number}')
+            if msg.sid:
+                return True, "WhatsApp test message dispatched via Twilio."
+            return False, "Twilio accepted the WhatsApp request but did not return a valid Message SID."
+        except Exception as e:
+            return False, f"Twilio WhatsApp error: {str(e)}"
 
 
 class ChannelFactory:
@@ -408,7 +489,8 @@ class HermesAgent:
         session = db.get_session()
         try:
             for ch in session.query(DBChannel).all():
-                channel = ChannelFactory.create(ch.channel_type, ch.config)
+                config_with_id = {**ch.config, 'id': ch.id}
+                channel = ChannelFactory.create(ch.channel_type, config_with_id)
                 if channel:
                     channel._stats = ch.channel_stats if ch.channel_stats else {'sent': 0, 'failed': 0}
                     self._channels[ch.id] = channel
@@ -722,11 +804,11 @@ class HermesAgent:
         }
         await self.process_event(trigger.get('camera_id'), event_context.get('frame_data'), event_result)
     
-    async def test_channel(self, channel_id: int) -> bool:
+    async def test_channel(self, channel_id: int) -> tuple[bool, str]:
         channel = self._channels.get(channel_id)
         if channel:
             return await channel.test()
-        return False
+        return False, "Channel not found in Hermes Agent."
     
     def register_event_callback(self, callback: Callable):
         self._event_callbacks.append(callback)

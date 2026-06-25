@@ -9,7 +9,8 @@ import {
   ToggleRight, 
   RefreshCw,
   Check,
-  AlertCircle
+  AlertCircle,
+  Edit2
 } from 'lucide-react';
 
 export default function Hermes() {
@@ -24,6 +25,7 @@ export default function Hermes() {
 
   // Forms states
   const [showChannelForm, setShowChannelForm] = useState(false);
+  const [editingChannelId, setEditingChannelId] = useState(null);
   const [chName, setChName] = useState('');
   const [chType, setChType] = useState('telegram');
   const [telegramToken, setTelegramToken] = useState('');
@@ -36,11 +38,19 @@ export default function Hermes() {
   const [twilioTo, setTwilioTo] = useState('');
 
   const [showTriggerForm, setShowTriggerForm] = useState(false);
+  const [editingTriggerId, setEditingTriggerId] = useState(null);
   const [trName, setTrName] = useState('');
   const [trCameraId, setTrCameraId] = useState('');
   const [trCondition, setTrCondition] = useState('');
   const [trSelectedChannels, setTrSelectedChannels] = useState([]);
   const [trCaptureSnapshot, setTrCaptureSnapshot] = useState(true);
+
+  // Validation helper: Check if Telegram Chat ID is non-numeric
+  const isTelegramChatIdInvalid = () => {
+    if (!telegramChatId) return false;
+    // If it contains any letters or the @ symbol, it is invalid
+    return /[a-zA-Z@_]/.test(telegramChatId);
+  };
 
   useEffect(() => {
     fetchCameras();
@@ -91,25 +101,35 @@ export default function Hermes() {
       
       if (res.ok) {
         const data = await res.json();
-        setTestStatuses(prev => ({ 
-          ...prev, 
-          [id]: data.success ? 'passed' : 'failed' 
-        }));
+        if (data.success) {
+          setTestStatuses(prev => ({ 
+            ...prev, 
+            [id]: 'passed' 
+          }));
+        } else {
+          setTestStatuses(prev => ({ 
+            ...prev, 
+            [id]: 'failed' 
+          }));
+          alert(`Channel Test Failed:\n\n${data.error || 'Unknown error occurred.'}`);
+        }
       } else {
+        const errData = await res.json().catch(() => ({}));
         setTestStatuses(prev => ({ ...prev, [id]: 'failed' }));
+        alert(`Channel Test Failed:\n\n${errData.detail || 'Server error occurred.'}`);
       }
     } catch (err) {
       setTestStatuses(prev => ({ ...prev, [id]: 'failed' }));
+      alert(`Channel Test Failed:\n\nNetwork error. Ensure that your backend server is running.`);
     } finally {
       setTestingChannelId(null);
-      // reset test message after 5 seconds
       setTimeout(() => {
         setTestStatuses(prev => {
           const updated = { ...prev };
           delete updated[id];
           return updated;
         });
-      }, 5000);
+      }, 7000);
     }
   };
 
@@ -121,9 +141,49 @@ export default function Hermes() {
       });
       if (res.ok) {
         fetchChannels();
-        fetchTriggers(); // reload triggers since channel linkage may change
+        fetchTriggers();
+        if (editingChannelId === id) {
+          handleCancelChannelEdit();
+        }
       }
     } catch (err) {}
+  };
+
+  const handleEditChannelClick = (ch) => {
+    setEditingChannelId(ch.id);
+    setChName(ch.name);
+    setChType(ch.channel_type);
+    setShowChannelForm(true);
+
+    const config = ch.config || {};
+    if (ch.channel_type === 'telegram') {
+      setTelegramToken(config.bot_token || '');
+      setTelegramChatId(config.chat_id || '');
+    } else if (ch.channel_type === 'discord') {
+      setDiscordWebhook(config.webhook_url || '');
+    } else if (ch.channel_type === 'webhook') {
+      setWebhookUrl(config.url || '');
+    } else if (ch.channel_type === 'sms' || ch.channel_type === 'whatsapp') {
+      setTwilioSid(config.account_sid || '');
+      setTwilioToken(config.auth_token || '');
+      setTwilioFrom(config.from || '');
+      setTwilioTo(config.to || '');
+    }
+  };
+
+  const handleCancelChannelEdit = () => {
+    setEditingChannelId(null);
+    setChName('');
+    setChType('telegram');
+    setTelegramToken('');
+    setTelegramChatId('');
+    setDiscordWebhook('');
+    setWebhookUrl('');
+    setTwilioSid('');
+    setTwilioToken('');
+    setTwilioFrom('');
+    setTwilioTo('');
+    setShowChannelForm(false);
   };
 
   const handleAddChannel = async (e) => {
@@ -142,8 +202,13 @@ export default function Hermes() {
     }
 
     try {
-      const res = await fetch('http://localhost:8000/api/hermes/channels', {
-        method: 'POST',
+      const url = editingChannelId 
+        ? `http://localhost:8000/api/hermes/channels/${editingChannelId}`
+        : 'http://localhost:8000/api/hermes/channels';
+      const method = editingChannelId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: chName,
@@ -153,16 +218,7 @@ export default function Hermes() {
       });
       
       if (res.ok) {
-        setChName('');
-        setTelegramToken('');
-        setTelegramChatId('');
-        setDiscordWebhook('');
-        setWebhookUrl('');
-        setTwilioSid('');
-        setTwilioToken('');
-        setTwilioFrom('');
-        setTwilioTo('');
-        setShowChannelForm(false);
+        handleCancelChannelEdit();
         fetchChannels();
       }
     } catch (err) {}
@@ -190,8 +246,30 @@ export default function Hermes() {
       });
       if (res.ok) {
         fetchTriggers();
+        if (editingTriggerId === id) {
+          handleCancelTriggerEdit();
+        }
       }
     } catch (err) {}
+  };
+
+  const handleEditTriggerClick = (tr) => {
+    setEditingTriggerId(tr.id);
+    setTrName(tr.name);
+    setTrCameraId(tr.camera_id || '');
+    setTrCondition(tr.condition_text);
+    setTrSelectedChannels(tr.notification_ids || []);
+    setTrCaptureSnapshot(tr.capture_snapshot);
+    setShowTriggerForm(true);
+  };
+
+  const handleCancelTriggerEdit = () => {
+    setEditingTriggerId(null);
+    setTrName('');
+    setTrCondition('');
+    setTrSelectedChannels([]);
+    setTrCaptureSnapshot(true);
+    setShowTriggerForm(false);
   };
 
   const handleSelectChannel = (id) => {
@@ -207,8 +285,13 @@ export default function Hermes() {
     if (!trName.trim() || !trCondition.trim()) return;
 
     try {
-      const res = await fetch('http://localhost:8000/api/hermes/triggers', {
-        method: 'POST',
+      const url = editingTriggerId 
+        ? `http://localhost:8000/api/hermes/triggers/${editingTriggerId}`
+        : 'http://localhost:8000/api/hermes/triggers';
+      const method = editingTriggerId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: trName,
@@ -221,10 +304,7 @@ export default function Hermes() {
       });
 
       if (res.ok) {
-        setTrName('');
-        setTrCondition('');
-        setTrSelectedChannels([]);
-        setShowTriggerForm(false);
+        handleCancelTriggerEdit();
         fetchTriggers();
       }
     } catch (err) {}
@@ -260,7 +340,13 @@ export default function Hermes() {
         <section className="triggers-tab-content">
           <div className="tab-section-header">
             <h2>Active Triggers</h2>
-            <button className="primary-btn" onClick={() => setShowTriggerForm(!showTriggerForm)}>
+            <button 
+              className="primary-btn" 
+              onClick={() => {
+                if (showTriggerForm) handleCancelTriggerEdit();
+                else setShowTriggerForm(true);
+              }}
+            >
               <Plus size={14} />
               <span>{showTriggerForm ? "Hide Form" : "Create Trigger"}</span>
             </button>
@@ -268,7 +354,7 @@ export default function Hermes() {
 
           {showTriggerForm && (
             <form className="admin-form-card" onSubmit={handleAddTrigger}>
-              <h3>Create Visual Trigger</h3>
+              <h3>{editingTriggerId ? `Edit Trigger: ${trName}` : 'Create Visual Trigger'}</h3>
               
               <div className="form-grid">
                 <div className="form-group">
@@ -340,8 +426,10 @@ export default function Hermes() {
               </div>
 
               <div className="form-actions-row">
-                <button type="button" className="text-btn" onClick={() => setShowTriggerForm(false)}>Cancel</button>
-                <button type="submit" className="primary-btn" disabled={channels.length === 0}>Save Trigger</button>
+                <button type="button" className="text-btn" onClick={handleCancelTriggerEdit}>Cancel</button>
+                <button type="submit" className="primary-btn" disabled={channels.length === 0}>
+                  {editingTriggerId ? 'Save Changes' : 'Save Trigger'}
+                </button>
               </div>
             </form>
           )}
@@ -364,6 +452,14 @@ export default function Hermes() {
                       </span>
                     </div>
                     <div className="trigger-card-controls">
+                      <button 
+                        className="delete-icon-btn"
+                        onClick={() => handleEditTriggerClick(tr)}
+                        title="Edit Trigger"
+                        style={{ marginRight: '6px' }}
+                      >
+                        <Edit2 size={13} />
+                      </button>
                       <button 
                         className="toggle-active-btn"
                         onClick={() => handleToggleTrigger(tr)}
@@ -410,7 +506,13 @@ export default function Hermes() {
         <section className="channels-tab-content">
           <div className="tab-section-header">
             <h2>Alert Channels</h2>
-            <button className="primary-btn" onClick={() => setShowChannelForm(!showChannelForm)}>
+            <button 
+              className="primary-btn" 
+              onClick={() => {
+                if (showChannelForm) handleCancelChannelEdit();
+                else setShowChannelForm(true);
+              }}
+            >
               <Plus size={14} />
               <span>{showChannelForm ? "Hide Form" : "Add Channel"}</span>
             </button>
@@ -418,7 +520,7 @@ export default function Hermes() {
 
           {showChannelForm && (
             <form className="admin-form-card" onSubmit={handleAddChannel}>
-              <h3>Add Notification Channel</h3>
+              <h3>{editingChannelId ? `Edit Channel: ${chName}` : 'Add Notification Channel'}</h3>
               
               <div className="form-grid">
                 <div className="form-group">
@@ -442,7 +544,7 @@ export default function Hermes() {
                   </select>
                 </div>
 
-                {/* Telegram Fields */}
+                {/* Telegram Fields with numeric validation warning */}
                 {chType === 'telegram' && (
                   <>
                     <div className="form-group">
@@ -455,13 +557,21 @@ export default function Hermes() {
                       />
                     </div>
                     <div className="form-group">
-                      <label>Chat ID</label>
+                      <label>Chat ID (Numeric Only)</label>
                       <input 
                         type="text" 
                         placeholder="e.g. 987654321"
                         value={telegramChatId}
                         onChange={e => setTelegramChatId(e.target.value)}
                       />
+                      {isTelegramChatIdInvalid() && (
+                        <div className="alert alert-info" style={{ marginTop: '6px', padding: '8px 12px', fontSize: '11px', lineHeight: '1.4', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: 'var(--text-normal)' }}>
+                          <AlertCircle size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom', color: '#3b82f6' }} />
+                          <strong>Telegram Username Detected!</strong> We will automatically resolve this to your numeric Chat ID when you click Save or Test.
+                          <br />
+                          <em>Note: You MUST send a message (e.g. <code>/start</code>) to your bot in Telegram first so the bot can discover you.</em>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
@@ -536,8 +646,10 @@ export default function Hermes() {
               </div>
 
               <div className="form-actions-row">
-                <button type="button" className="text-btn" onClick={() => setShowChannelForm(false)}>Cancel</button>
-                <button type="submit" className="primary-btn">Save Channel</button>
+                <button type="button" className="text-btn" onClick={handleCancelChannelEdit}>Cancel</button>
+                <button type="submit" className="primary-btn">
+                  {editingChannelId ? 'Save Changes' : 'Save Channel'}
+                </button>
               </div>
             </form>
           )}
@@ -557,13 +669,22 @@ export default function Hermes() {
                       <h4>{ch.name}</h4>
                       <span className="channel-type-badge">{ch.channel_type.toUpperCase()}</span>
                     </div>
-                    <button 
-                      className="delete-icon-btn"
-                      onClick={() => handleDeleteChannel(ch.id)}
-                      title="Delete Channel"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button 
+                        className="delete-icon-btn"
+                        onClick={() => handleEditChannelClick(ch)}
+                        title="Edit Channel"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button 
+                        className="delete-icon-btn"
+                        onClick={() => handleDeleteChannel(ch.id)}
+                        title="Delete Channel"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="channel-card-stats-row">

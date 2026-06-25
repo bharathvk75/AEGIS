@@ -7,12 +7,16 @@ import {
   Info, 
   Camera, 
   FileVideo, 
-  Link2 
+  Link2,
+  Edit2
 } from 'lucide-react';
 
 export default function Cameras() {
   const [cameras, setCameras] = useState([]);
   const [showAddForm, setShowAddForm] = useState(false);
+  
+  // Form states
+  const [editingCameraId, setEditingCameraId] = useState(null);
   const [name, setName] = useState('');
   const [sourceType, setSourceType] = useState('usb');
   const [sourceUrl, setSourceUrl] = useState('0');
@@ -59,13 +63,37 @@ export default function Cameras() {
       });
       if (res.ok) {
         fetchCameras();
+        if (editingCameraId === id) {
+          handleCancelEdit();
+        }
       }
     } catch (err) {
       console.error("Error deleting camera:", err);
     }
   };
 
-  // Quick Add Integrated Webcam
+  const handleEditClick = (cam) => {
+    setEditingCameraId(cam.id);
+    setName(cam.name);
+    setSourceType(cam.source_type);
+    setSourceUrl(cam.source_url);
+    setFps(cam.fps);
+    setShowAddForm(true);
+    setError('');
+    setSuccess('');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCameraId(null);
+    setName('');
+    setSourceType('usb');
+    setSourceUrl('0');
+    setFps(10);
+    setShowAddForm(false);
+    setError('');
+    setSuccess('');
+  };
+
   const handleQuickAddWebcam = async () => {
     try {
       setError('');
@@ -116,25 +144,28 @@ export default function Cameras() {
         fps: parseInt(fps) || 10
       };
 
-      const res = await fetch('http://localhost:8000/api/cameras', {
-        method: 'POST',
+      const url = editingCameraId 
+        ? `http://localhost:8000/api/cameras/${editingCameraId}`
+        : 'http://localhost:8000/api/cameras';
+      
+      const method = editingCameraId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
       if (res.ok) {
-        setSuccess("Camera added successfully!");
-        setName('');
-        setSourceUrl('');
-        setFps(10);
-        setShowAddForm(false);
+        setSuccess(editingCameraId ? "Camera updated successfully!" : "Camera added successfully!");
+        handleCancelEdit();
         fetchCameras();
       } else {
         const data = await res.json();
-        setError(data.detail || "Failed to add camera.");
+        setError(data.detail || "Failed to save camera.");
       }
     } catch (err) {
-      setError("Network error adding camera.");
+      setError("Network error saving camera.");
     }
   };
 
@@ -158,7 +189,13 @@ export default function Cameras() {
             <Camera size={14} />
             <span>+ Add Integrated Webcam</span>
           </button>
-          <button className="primary-btn" onClick={() => setShowAddForm(!showAddForm)}>
+          <button 
+            className="primary-btn" 
+            onClick={() => {
+              if (showAddForm) handleCancelEdit();
+              else setShowAddForm(true);
+            }}
+          >
             <Plus size={14} />
             <span>{showAddForm ? "Hide Form" : "Add Camera"}</span>
           </button>
@@ -168,10 +205,10 @@ export default function Cameras() {
       {error && <div className="alert alert-error">{error}</div>}
       {success && <div className="alert alert-success">{success}</div>}
 
-      {/* Add Camera Form */}
+      {/* Add / Edit Camera Form */}
       {showAddForm && (
         <form className="admin-form-card" onSubmit={handleSubmit}>
-          <h3>Add Camera Source</h3>
+          <h3>{editingCameraId ? `Edit Camera: ${name}` : 'Add Camera Source'}</h3>
           <div className="form-grid">
             <div className="form-group">
               <label>Camera Name</label>
@@ -219,8 +256,10 @@ export default function Cameras() {
           </div>
 
           <div className="form-actions-row">
-            <button type="button" className="text-btn" onClick={() => setShowAddForm(false)}>Cancel</button>
-            <button type="submit" className="primary-btn">Save Camera Source</button>
+            <button type="button" className="text-btn" onClick={handleCancelEdit}>Cancel</button>
+            <button type="submit" className="primary-btn">
+              {editingCameraId ? 'Save Changes' : 'Save Camera Source'}
+            </button>
           </div>
         </form>
       )}
@@ -242,6 +281,13 @@ export default function Cameras() {
                   <span className="source-label-type">{cam.source_type.toUpperCase()}</span>
                 </div>
                 <div className="card-controls">
+                  <button 
+                    className="control-btn edit-btn"
+                    onClick={() => handleEditClick(cam)}
+                    title="Edit Camera"
+                  >
+                    <Edit2 size={14} />
+                  </button>
                   <button 
                     className={`control-btn toggle-active ${cam.enabled ? 'enabled' : 'disabled'}`}
                     onClick={() => handleToggleEnabled(cam)}

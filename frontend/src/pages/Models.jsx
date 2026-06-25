@@ -11,7 +11,9 @@ import {
   Plus,
   Key,
   Globe,
-  Layers
+  Layers,
+  Edit2,
+  Trash2
 } from 'lucide-react';
 
 export default function Models() {
@@ -198,6 +200,40 @@ export default function Models() {
     } finally {
       setTestingProvider('');
     }
+  };
+
+  const handleDeleteCloudProvider = async (name) => {
+    if (!window.confirm(`Are you sure you want to remove the VLM provider "${name}"?`)) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/models/${name}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setFormSuccess(`Successfully removed ${name}.`);
+        fetchModelsConfig();
+        setTimeout(() => setFormSuccess(''), 5000);
+      } else {
+        const data = await res.json();
+        setFormError(data.detail || `Failed to delete ${name}.`);
+      }
+    } catch (err) {
+      setFormError(`Network error deleting ${name}.`);
+    }
+  };
+
+  const handleEditCloudProviderClick = (prov) => {
+    // Find matching preset key based on name
+    const presetKey = Object.keys(presets).find(
+      key => presets[key].name.toLowerCase() === prov.name.toLowerCase()
+    ) || 'custom';
+    
+    setSelectedPreset(presetKey);
+    setCustomName(prov.name);
+    setCustomEndpoint(prov.endpoint || '');
+    setCustomModel(prov.default_model || '');
+    setCustomApiKey(''); // Let them type a new key or preserve existing empty
+    setFormError('');
+    setFormSuccess(`Loaded settings for ${prov.name}. You can edit it now.`);
   };
 
   return (
@@ -478,7 +514,7 @@ export default function Models() {
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
                       {prov.connected ? (
                         <span className="badge-connected" style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(16,185,129,0.08)', color: 'var(--accent-green)', border: '1px solid rgba(16,185,129,0.2)' }}>
                           <CheckCircle size={10} /> Online
@@ -488,6 +524,45 @@ export default function Models() {
                           <XCircle size={10} /> Offline
                         </span>
                       )}
+                      
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button 
+                          type="button"
+                          onClick={() => handleEditCloudProviderClick(prov)}
+                          title="Edit Provider"
+                          style={{
+                            background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            padding: '4px 6px',
+                            color: 'var(--text-muted)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            transition: 'all 0.2s'
+                          }}
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => handleDeleteCloudProvider(prov.name)}
+                          title="Delete Provider"
+                          style={{
+                            background: 'rgba(239,68,68,0.06)',
+                            border: '1px solid rgba(239,68,68,0.2)',
+                            borderRadius: '4px',
+                            padding: '4px 6px',
+                            color: '#ef4444',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            transition: 'all 0.2s'
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))

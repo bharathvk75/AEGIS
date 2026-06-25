@@ -6,7 +6,10 @@ import {
   Image, 
   Calendar,
   Layers,
-  ZoomIn
+  ZoomIn,
+  Save,
+  Clock,
+  RefreshCw
 } from 'lucide-react';
 
 export default function Storage({ stats, fetchStats }) {
@@ -15,8 +18,18 @@ export default function Storage({ stats, fetchStats }) {
   const [galleryEvents, setGalleryEvents] = useState([]);
   const [activeLightbox, setActiveLightbox] = useState(null);
 
+  // Storage config states
+  const [maxSizeGb, setMaxSizeGb] = useState(50);
+  const [autoErase, setAutoErase] = useState(true);
+  const [snapshotsDays, setSnapshotsDays] = useState(7);
+  const [clipsDays, setClipsDays] = useState(3);
+  const [logsDays, setLogsDays] = useState(30);
+  const [configSuccess, setConfigSuccess] = useState('');
+  const [configError, setConfigError] = useState('');
+
   useEffect(() => {
     fetchGalleryEvents();
+    fetchStorageConfig();
   }, []);
 
   const fetchGalleryEvents = async () => {
@@ -24,12 +37,29 @@ export default function Storage({ stats, fetchStats }) {
       const res = await fetch('http://localhost:8000/api/events?limit=50');
       if (res.ok) {
         const data = await res.json();
-        // Filter out events that don't have a snapshot path
         const withSnapshots = data.filter(e => e.snapshot_path);
         setGalleryEvents(withSnapshots);
       }
     } catch (err) {
       console.error("Error loading gallery:", err);
+    }
+  };
+
+  const fetchStorageConfig = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/storage/config');
+      if (res.ok) {
+        const data = await res.json();
+        setMaxSizeGb(data.max_size_gb || 50);
+        setAutoErase(data.auto_erase !== undefined ? data.auto_erase : true);
+        if (data.retention) {
+          setSnapshotsDays(data.retention.snapshots_days || 7);
+          setClipsDays(data.retention.clips_days || 3);
+          setLogsDays(data.retention.logs_days || 30);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading storage config:", err);
     }
   };
 
@@ -43,8 +73,8 @@ export default function Storage({ stats, fetchStats }) {
       if (res.ok) {
         const data = await res.json();
         setCleanMessage(`Cleanup complete! Successfully freed ${data.cleaned_mb.toFixed(1)} MB of storage space.`);
-        fetchStats(); // update storage metrics
-        fetchGalleryEvents(); // refresh gallery
+        fetchStats();
+        fetchGalleryEvents();
       } else {
         setCleanMessage('Failed to run storage cleanup.');
       }
@@ -52,6 +82,66 @@ export default function Storage({ stats, fetchStats }) {
       setCleanMessage('Network error running cleanup.');
     } finally {
       setCleaning(false);
+    }
+  };
+
+  const handleSaveConfig = async (e) => {
+    e.preventDefault();
+    setConfigSuccess('');
+    setConfigError('');
+
+    try {
+      const res = await fetch('http://localhost:8000/api/storage/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          max_size_gb: parseInt(maxSizeGb),
+          auto_erase: autoErase,
+          snapshots_days: parseInt(snapshotsDays),
+          clips_days: parseInt(clipsDays),
+          logs_days: parseInt(logsDays)
+        })
+      });
+
+      if (res.ok) {
+        setConfigSuccess('Storage configuration saved successfully!');
+        fetchStats(); // Update dashboard metric limits
+        setTimeout(() => setConfigSuccess(''), 5000);
+      } else {
+        setConfigError('Failed to save configuration.');
+      }
+    } catch (err) {
+      setConfigError('Network error saving configuration.');
+    }
+  };
+
+  const handleResetDefaults = (e) => {
+    e.preventDefault();
+    setMaxSizeGb(50);
+    setAutoErase(true);
+    setSnapshotsDays(7);
+    setClipsDays(3);
+    setLogsDays(30);
+    setConfigSuccess('Reset to defaults! Click "Save Configuration" to persist.');
+    setTimeout(() => setConfigSuccess(''), 5000);
+  };
+
+  const handleDeleteEvent = async (id) => {
+    if (!window.confirm("Are you sure you want to permanently delete this vision capture event and its snapshot?")) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/events/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setActiveLightbox(null);
+        fetchGalleryEvents();
+        if (fetchStats) fetchStats();
+      } else {
+        alert("Failed to delete the capture event.");
+      }
+    } catch (err) {
+      console.error("Error deleting event:", err);
+      alert("Network error deleting capture event.");
     }
   };
 
@@ -64,11 +154,11 @@ export default function Storage({ stats, fetchStats }) {
         </div>
       </header>
 
-      {/* Storage Gauges */}
+      {/* Storage config and Gauges Grid */}
       <div className="storage-dash-grid">
         
         {/* Resource card */}
-        <div className="storage-metric-card">
+        <div className="storage-metric-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
           <div className="card-top-icon">
             <HardDrive size={24} className="text-blue" />
             <h3>Disk Allocation</h3>
@@ -77,7 +167,7 @@ export default function Storage({ stats, fetchStats }) {
             <div className="disk-fraction">
               <span className="used-number">{(stats?.storage?.used_gb ?? 0).toFixed(2)}</span>
               <span className="slash">/</span>
-              <span className="total-number">{(stats?.storage?.total_gb ?? 50).toFixed(0)} GB</span>
+              <span className="total-number">{(stats?.storage?.total_gb ?? maxSizeGb).toFixed(0)} GB</span>
             </div>
             <div className="gauge-bar-wrapper">
               <div 
@@ -90,10 +180,15 @@ export default function Storage({ stats, fetchStats }) {
               <span>{(stats?.storage?.total_gb - stats?.storage?.used_gb).toFixed(2)} GB Free</span>
             </div>
           </div>
+          <div style={{ marginTop: '16px' }}>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+              Disk allocation represents the space AEGIS is permitted to occupy. You can configure this threshold on the right.
+            </p>
+          </div>
         </div>
 
         {/* Maintenance card */}
-        <div className="storage-maintenance-card">
+        <div className="storage-maintenance-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div className="card-top-icon">
             <Trash2 size={24} className="text-teal" />
             <h3>Maintenance & Clean</h3>
@@ -107,18 +202,113 @@ export default function Storage({ stats, fetchStats }) {
               className="clean-storage-action-btn"
               onClick={handleCleanStorage}
               disabled={cleaning}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
             >
-              {cleaning ? 'Running Cleanup...' : 'Prune Storage Now'}
+              {cleaning && <RefreshCw size={14} className="spinner-icon" />}
+              <span>{cleaning ? 'Running Cleanup...' : 'Prune Storage Now'}</span>
             </button>
 
             {cleanMessage && (
-              <div className="clean-alert-box">
+              <div className="clean-alert-box" style={{ marginTop: '8px' }}>
                 {cleanMessage}
               </div>
             )}
           </div>
         </div>
 
+      </div>
+
+      {/* Storage Configuration form */}
+      <div className="admin-form-card" style={{ marginTop: '0px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Settings className="text-blue" size={20} />
+          <h3>Retention & Erase Policies</h3>
+        </div>
+
+        {configSuccess && <div className="alert alert-success">{configSuccess}</div>}
+        {configError && <div className="alert alert-error">{configError}</div>}
+
+        <form onSubmit={handleSaveConfig} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Maximum Allowed Size (GB)</label>
+              <input 
+                type="number" 
+                min="5" 
+                max="1000" 
+                value={maxSizeGb} 
+                onChange={e => setMaxSizeGb(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Snapshot Retention (Days)</label>
+              <input 
+                type="number" 
+                min="1" 
+                max="365" 
+                value={snapshotsDays} 
+                onChange={e => setSnapshotsDays(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Video Clip Retention (Days)</label>
+              <input 
+                type="number" 
+                min="1" 
+                max="365" 
+                value={clipsDays} 
+                onChange={e => setClipsDays(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>System Logs Retention (Days)</label>
+              <input 
+                type="number" 
+                min="1" 
+                max="365" 
+                value={logsDays} 
+                onChange={e => setLogsDays(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="checkbox-group">
+              <input 
+                type="checkbox" 
+                id="auto-erase-checkbox" 
+                checked={autoErase}
+                onChange={e => setAutoErase(e.target.checked)}
+              />
+              <label htmlFor="auto-erase-checkbox">
+                Auto-erase oldest data (FIFO) when allocation limit is exceeded
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button 
+                type="button"
+                className="secondary-btn"
+                onClick={handleResetDefaults}
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                <RefreshCw size={14} />
+                <span>Reset to Defaults</span>
+              </button>
+              <button 
+                type="submit" 
+                className="primary-btn"
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                <Save size={14} />
+                <span>Save Configuration</span>
+              </button>
+            </div>
+          </div>
+        </form>
       </div>
 
       {/* Vision Gallery */}
@@ -188,10 +378,20 @@ export default function Storage({ stats, fetchStats }) {
                   className="lightbox-img"
                 />
               </div>
-              <div className="lightbox-footer-metadata">
-                <div className="meta-badge"><Calendar size={12} /> {new Date(activeLightbox.created_at).toLocaleString()}</div>
-                <div className="meta-badge"><Layers size={12} /> Confidence: {(activeLightbox.confidence * 100).toFixed(0)}%</div>
-                <div className={`meta-badge severity ${activeLightbox.severity}`}>Severity: {activeLightbox.severity.toUpperCase()}</div>
+              <div className="lightbox-footer-metadata" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <div className="meta-badge"><Calendar size={12} /> {new Date(activeLightbox.created_at).toLocaleString()}</div>
+                  <div className="meta-badge"><Layers size={12} /> Confidence: {(activeLightbox.confidence * 100).toFixed(0)}%</div>
+                  <div className={`meta-badge severity ${activeLightbox.severity}`}>Severity: {activeLightbox.severity.toUpperCase()}</div>
+                </div>
+                <button 
+                  className="secondary-btn" 
+                  onClick={() => handleDeleteEvent(activeLightbox.id)}
+                  style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Trash2 size={13} />
+                  <span>Delete Capture</span>
+                </button>
               </div>
             </div>
           </div>

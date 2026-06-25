@@ -82,6 +82,13 @@ class TriggerCreate(BaseModel):
     capture_clip: bool = False
     clip_duration: int = 30
 
+class StorageConfigUpdate(BaseModel):
+    max_size_gb: int
+    auto_erase: bool
+    snapshots_days: int
+    clips_days: int
+    logs_days: int
+
 # --- Live Streaming Utility ---
 def generate_mjpeg_stream(camera_id: int):
     cam_mgr = get_camera_manager()
@@ -462,6 +469,34 @@ def connect_model(config_data: ModelConfig):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/api/models/{provider}")
+def delete_model(provider: str):
+    config = get_config()
+    provider_lower = provider.lower()
+    
+    try:
+        if provider_lower in ("ollama", "lmstudio"):
+            raise HTTPException(status_code=400, detail="Cannot delete built-in local providers. You can disable them instead.")
+        
+        providers = config.get("external_ai.providers", [])
+        updated_providers = [p for p in providers if p.get('name', '').lower() != provider_lower]
+        
+        if len(providers) == len(updated_providers):
+            raise HTTPException(status_code=404, detail="Provider not found")
+            
+        config.set("external_ai.providers", updated_providers)
+        
+        # Reload LLM clients
+        from core.ai.llm_clients import get_llm_manager
+        manager = get_llm_manager()
+        manager.reload_clients()
+        
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Hermes Channels Endpoints ---
 @app.get("/api/hermes/channels")
 def list_channels():
@@ -502,6 +537,19 @@ def add_channel(ch_data: ChannelCreate):
         return {"success": True, "id": channel_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@app.put("/api/hermes/channels/{id}")
+def update_channel(id: int, ch_data: ChannelCreate):
+    try:
+        hermes = get_hermes()
+        config = {
+            **ch_data.config,
+            "name": ch_data.name,
+            "type": ch_data.channel_type
+        }
+        hermes.update_channel(id, config)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/hermes/channels/{id}")
 def delete_channel(id: int):
@@ -516,8 +564,8 @@ def delete_channel(id: int):
 async def test_channel(id: int):
     try:
         hermes = get_hermes()
-        success = await hermes.test_channel(id)
-        return {"success": success}
+        success, message = await hermes.test_channel(id)
+        return {"success": success, "error": message if not success else None, "message": message if success else None}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -584,6 +632,25 @@ def toggle_trigger(id: int, body: Dict[str, bool]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.put("/api/hermes/triggers/{id}")
+def update_trigger(id: int, tg_data: TriggerCreate):
+    try:
+        hermes = get_hermes()
+        trigger_dict = {
+            "name": tg_data.name,
+            "camera_id": tg_data.camera_id,
+            "condition_text": tg_data.condition_text,
+            "notification_ids": tg_data.notification_ids,
+            "enabled": tg_data.enabled,
+            "capture_snapshot": tg_data.capture_snapshot,
+            "capture_clip": tg_data.capture_clip,
+            "clip_duration": tg_data.clip_duration
+        }
+        hermes.update_trigger(id, trigger_dict)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Events Endpoints ---
 @app.get("/api/events")
 def list_events(limit: int = 50, camera_id: Optional[int] = None):
@@ -613,6 +680,41 @@ def list_events(limit: int = 50, camera_id: Optional[int] = None):
     finally:
         session.close()
 
+@app.delete("/api/events/{id}")
+def delete_event(id: int):
+    db = get_db()
+    session = db.get_session()
+    try:
+        event = session.query(Event).filter_by(id=id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        # Delete the snapshot file from disk if it exists
+        if event.snapshot_path:
+            try:
+                config = get_config()
+                volumes_base = Path(config.get("storage.volumes_path", "data/volumes")).resolve()
+                file_path = Path(event.snapshot_path)
+                if not file_path.is_absolute():
+                    file_path = volumes_base / file_path
+                else:
+                    file_path = file_path.resolve()
+                
+                if file_path.exists() and file_path.is_file() and str(file_path).startswith(str(volumes_base)):
+                    file_path.unlink()
+                    logger.info(f"Deleted snapshot file: {file_path}")
+            except Exception as e:
+                logger.error(f"Error deleting event snapshot file: {e}")
+                
+        session.delete(event)
+        session.commit()
+        return {"success": True}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
 # --- Storage & Asset Serving Endpoints ---
 @app.post("/api/storage/clean")
 def clean_storage():
@@ -620,6 +722,24 @@ def clean_storage():
         storage = get_storage()
         cleaned_bytes = storage.clean_old_data()
         return {"success": True, "cleaned_mb": cleaned_bytes / (1024**2)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/storage/config")
+def get_storage_config():
+    config = get_config()
+    return config.get_section("storage")
+
+@app.post("/api/storage/config")
+def update_storage_config(data: StorageConfigUpdate):
+    config = get_config()
+    try:
+        config.set("storage.max_size_gb", data.max_size_gb)
+        config.set("storage.auto_erase", data.auto_erase)
+        config.set("storage.retention.snapshots_days", data.snapshots_days)
+        config.set("storage.retention.clips_days", data.clips_days)
+        config.set("storage.retention.logs_days", data.logs_days)
+        return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
