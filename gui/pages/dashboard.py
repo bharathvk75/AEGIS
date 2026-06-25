@@ -293,7 +293,10 @@ class CameraGridView(ctk.CTkFrame):
     
     def remove_camera(self, camera_id: int):
         if camera_id in self._tiles:
-            self._tiles[camera_id].destroy()
+            tile = self._tiles[camera_id]
+            if hasattr(tile, 'stop_updates'):
+                tile.stop_updates()
+            tile.destroy()
             del self._tiles[camera_id]
             self._relayout()
             self._cam_count.configure(text=f'{len(self._tiles)} source{"s" if len(self._tiles) != 1 else ""}')
@@ -305,6 +308,8 @@ class CameraGridView(ctk.CTkFrame):
     
     def clear(self):
         for tile in list(self._tiles.values()):
+            if hasattr(tile, 'stop_updates'):
+                tile.stop_updates()
             tile.destroy()
         self._tiles.clear()
     
