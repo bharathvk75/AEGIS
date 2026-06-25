@@ -137,6 +137,15 @@ def main():
     backend_thread.start()
     frontend_thread.start()
     
+    # Automatically open web browser after a brief delay for servers to bind
+    def open_browser():
+        time.sleep(2.0)
+        import webbrowser
+        print(f"{Colors.HEADER}{Colors.BOLD}[AEGIS] Opening browser at http://localhost:5173...{Colors.ENDC}")
+        webbrowser.open("http://localhost:5173")
+        
+    threading.Thread(target=open_browser, daemon=True).start()
+    
     # Handle graceful exit
     def signal_handler(sig, frame):
         print(f"\n{Colors.WARNING}[AEGIS] Shutting down services...{Colors.ENDC}")

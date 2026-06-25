@@ -53,21 +53,11 @@ def check_dependencies():
 def main():
     logger = setup_logging()
     
-    missing_deps = check_dependencies()
-    if missing_deps:
-        logger.error(f"Missing dependencies: {', '.join(missing_deps)}")
-        print(f"\n[!] Please install missing dependencies:")
-        print(f"    pip install {' '.join(missing_deps)}\n")
-        sys.exit(1)
-    
     try:
-        logger.info("Initializing AEGIS application...")
+        logger.info("Initializing AEGIS Web Application...")
         
-        from gui.app import AEGISApp
-        
-        logger.info("Starting GUI...")
-        app = AEGISApp()
-        app.mainloop()
+        import run_aegis
+        run_aegis.main()
         
     except Exception as e:
         logger.exception(f"AEGIS crashed: {e}")
