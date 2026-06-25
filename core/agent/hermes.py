@@ -65,12 +65,29 @@ class TelegramChannel(NotificationChannel):
     async def test(self) -> bool:
         try:
             import httpx
-            url = f'https://api.telegram.org/bot{self.bot_token}/getMe'
+            # 1. Verify the bot token is valid
+            url_me = f'https://api.telegram.org/bot{self.bot_token}/getMe'
             async with httpx.AsyncClient() as client:
-                resp = await client.post(url, timeout=5.0)
-                return resp.status_code == 200
-        except Exception:
-
+                resp_me = await client.get(url_me, timeout=5.0)
+                if resp_me.status_code != 200:
+                    print(f"[Telegram-Test] Bot token check failed. Status: {resp_me.status_code}, Response: {resp_me.text}")
+                    return False
+                
+                # 2. Try sending a test message to verify the chat_id and that the conversation has started
+                if self.chat_id:
+                    url_send = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
+                    payload = {
+                        'chat_id': self.chat_id,
+                        'text': '🧪 <b>AEGIS Notification Test</b>\n\nYour Telegram alert channel is configured and delivering successfully.',
+                        'parse_mode': 'HTML'
+                    }
+                    resp_send = await client.post(url_send, json=payload, timeout=10.0)
+                    if resp_send.status_code != 200:
+                        print(f"[Telegram-Test] sendMessage failed for chat_id: {self.chat_id}. Status: {resp_send.status_code}, Response: {resp_send.text}")
+                        return False
+            return True
+        except Exception as e:
+            print(f"[Telegram-Test] Error testing Telegram bot: {e}")
             return False
     
     def _format_message(self, message: Dict[str, Any], event_data: Dict[str, Any]) -> str:
