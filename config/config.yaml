@@ -1,0 +1,50 @@
+app:
+  min_to_tray: true
+  name: AEGIS
+  theme: dark
+  version: 1.0.0
+camera:
+  buffer_size: 5
+  default_fps: 10
+  reconnect_attempts: 3
+  reconnect_delay: 5
+database:
+  path: data/aegis.db
+external_ai:
+  enabled: true
+  providers:
+  - api_key: AIzaSyC6emAZNUGhfA2GXV3quCEEZLfFgJCLuRk
+    default_model: gemini-1.5-flash
+    endpoint: https://generativelanguage.googleapis.com
+    name: Gemini
+  - api_key: ''
+    default_model: gpt-4o
+    endpoint: https://api.openai.com/v1
+    name: OpenAI
+  - api_key: ''
+    default_model: claude-3-5-sonnet-20241022
+    endpoint: https://api.anthropic.com/v1
+    name: Anthropic
+hermes:
+  check_interval: 2
+  max_events_in_memory: 100
+lmstudio:
+  enabled: false
+  host: http://localhost:1234
+logging:
+  backup_count: 5
+  level: INFO
+  max_size_mb: 100
+  path: data/logs
+ollama:
+  default_model: llava
+  host: http://localhost:11434
+storage:
+  auto_erase: true
+  max_size_gb: 140
+  retention:
+    clips_days: 3
+    logs_days: 30
+    snapshots_days: 7
+  strategy: fifo
+  volumes_path: data/volumes
