@@ -12,24 +12,12 @@ database:
   path: data/aegis.db
 external_ai:
   enabled: true
-  providers:
-  - api_key: AIzaSyC6emAZNUGhfA2GXV3quCEEZLfFgJCLuRk
-    default_model: gemini-1.5-flash
-    endpoint: https://generativelanguage.googleapis.com
-    name: Gemini
-  - api_key: ''
-    default_model: gpt-4o
-    endpoint: https://api.openai.com/v1
-    name: OpenAI
-  - api_key: ''
-    default_model: claude-3-5-sonnet-20241022
-    endpoint: https://api.anthropic.com/v1
-    name: Anthropic
+  providers: []
 hermes:
   check_interval: 2
   max_events_in_memory: 100
 lmstudio:
-  enabled: false
+  enabled: true
   host: http://localhost:1234
 logging:
   backup_count: 5

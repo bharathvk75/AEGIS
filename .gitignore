@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+
+# Databases & Logs
+data/*.db
+data/logs/
+*.log
+
+# Snapshots and Media volumes
+data/volumes/snapshots/
+data/volumes/clips/
