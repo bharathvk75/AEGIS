@@ -99,7 +99,9 @@ def generate_mjpeg_stream(camera_id: int):
             else:
                 # If frame is not available, yield a small delay to prevent CPU spinning
                 time.sleep(0.1)
-            time.sleep(1.0 / cam_mgr.get_camera(camera_id).get('fps', 10))
+            cam = cam_mgr.get_camera(camera_id)
+            fps = cam.get('fps', 10) if cam else 10
+            time.sleep(1.0 / fps)
     except GeneratorExit:
         logger.info(f"Stream client disconnected for camera {camera_id}")
     except Exception as e:
