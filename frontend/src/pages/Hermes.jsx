@@ -10,7 +10,10 @@ import {
   RefreshCw,
   Check,
   AlertCircle,
-  Edit2
+  Edit2,
+  Globe,
+  Link2,
+  ExternalLink
 } from 'lucide-react';
 
 export default function Hermes() {
@@ -22,6 +25,31 @@ export default function Hermes() {
   // Testing states
   const [testingChannelId, setTestingChannelId] = useState(null);
   const [testStatuses, setTestStatuses] = useState({});
+
+  // Tunnel states
+  const [tunnelUrl, setTunnelUrl] = useState('');
+  const [generatingTunnel, setGeneratingTunnel] = useState(false);
+
+  const handleGenerateTunnel = async () => {
+    setGeneratingTunnel(true);
+    try {
+      const res = await fetch('http://localhost:8000/api/hermes/tunnel');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) {
+          setTunnelUrl(data.url);
+        } else {
+          alert("Failed to establish secure tunnel. Please check system SSH or server logs.");
+        }
+      } else {
+        alert("Server error generating tunnel link.");
+      }
+    } catch (err) {
+      alert("Network error establishing tunnel.");
+    } finally {
+      setGeneratingTunnel(false);
+    }
+  };
 
   // Forms states
   const [showChannelForm, setShowChannelForm] = useState(false);
@@ -320,7 +348,7 @@ export default function Hermes() {
       </header>
 
       {/* Sub tabs Navigation */}
-      <div className="sub-tab-navigation">
+      <div className="sub-tab-navigation" style={{ marginBottom: '20px' }}>
         <button 
           className={`sub-tab-btn ${activeSubTab === 'triggers' ? 'active' : ''}`}
           onClick={() => setActiveSubTab('triggers')}
@@ -333,6 +361,59 @@ export default function Hermes() {
         >
           Notification Channels
         </button>
+      </div>
+
+      {/* Secure Tunnel Banner */}
+      <div className="admin-form-card" style={{ marginBottom: '25px', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0, fontSize: '15px', color: 'var(--text-normal)' }}>
+              <Globe size={16} className="text-blue" style={{ color: '#3b82f6' }} />
+              <span>AEGIS Live Phone Preview & Control Center</span>
+            </h3>
+            <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '4px', maxWidth: '650px', lineHeight: '1.4' }}>
+              Create a temporary secure public link to view live surveillance feeds on your phone and control the AEGIS system remotely via Telegram.
+            </p>
+          </div>
+          <button 
+            type="button" 
+            className="secondary-btn"
+            onClick={handleGenerateTunnel}
+            disabled={generatingTunnel}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', borderColor: 'rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.05)', fontSize: '11px', padding: '6px 12px' }}
+          >
+            {generatingTunnel ? <RefreshCw size={12} className="spinner-icon" /> : <Link2 size={12} />}
+            <span>{generatingTunnel ? 'Establishing Tunnel...' : tunnelUrl ? 'Refresh Link' : 'Generate Secure Link'}</span>
+          </button>
+        </div>
+
+        {tunnelUrl && (
+          <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid var(--border-subtle)' }}>
+            <p style={{ fontSize: '12px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-normal)' }}>🌐 Public Live Feeds (Accessible Anywhere):</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
+              {cameras.map(c => (
+                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-inset)', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '11.5px', fontWeight: '500', color: 'var(--text-normal)' }}>{c.name}</span>
+                  <a 
+                    href={`${tunnelUrl}/api/cameras/${c.id}/stream`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    style={{ color: '#3b82f6', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', textDecoration: 'none' }}
+                  >
+                    <span>Watch Feed</span>
+                    <ExternalLink size={10} />
+                  </a>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', fontSize: '10.5px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', padding: '8px 10px', borderRadius: '4px' }}>
+              <span>ℹ️</span>
+              <span>
+                Your public URL is: <code>{tunnelUrl}</code>. Use Telegram command <code>/live</code> to send these feeds directly to your phone.
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* --- VISUAL TRIGGERS TAB --- */}

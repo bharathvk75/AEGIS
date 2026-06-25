@@ -830,6 +830,10 @@ class HermesAgent:
 
     def stop(self):
         self._running = False
+        try:
+            get_tunnel_manager().stop()
+        except Exception:
+            pass
         if self._thread:
             self._thread.join(timeout=1)
             self._thread = None
@@ -838,11 +842,19 @@ class HermesAgent:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        # Run the main async orchestrator that manages analysis and Telegram polling
+        loop.run_until_complete(self._async_orchestrator())
+
+    async def _async_orchestrator(self):
+        # Start the Telegram polling orchestrator as a background task
+        telegram_task = asyncio.create_task(self._telegram_polling_orchestrator())
+        
         from core.camera.capture import get_camera_manager
+        print("[Hermes] Active async orchestrator started successfully.")
         
         while self._running:
             try:
-                time.sleep(self.check_interval)
+                await asyncio.sleep(self.check_interval)
                 
                 cam_mgr = get_camera_manager()
                 cameras = cam_mgr.get_all_cameras()
@@ -870,12 +882,354 @@ class HermesAgent:
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
                     
-                    loop.run_until_complete(
-                        self.evaluate_triggers(camera_id, frame_data, event_context)
-                    )
+                    await self.evaluate_triggers(camera_id, frame_data, event_context)
             except Exception as e:
-                print(f"Error in Hermes Agent analysis loop: {e}")
-                time.sleep(1)
+                print(f"[Hermes] Error in async analysis loop: {e}")
+                await asyncio.sleep(1)
+                
+        # Graceful cleanup of background tasks
+        telegram_task.cancel()
+        try:
+            await telegram_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _telegram_polling_orchestrator(self):
+        active_tasks = {} # token -> Task
+        print("[Telegram-Control] Orchestrator is running and monitoring active bots...")
+        
+        while self._running:
+            try:
+                # Find all unique active bot tokens in configured Telegram channels
+                bot_tokens = set()
+                for ch in self._channels.values():
+                    if ch.channel_type == 'telegram' and ch.enabled:
+                        token = ch.config.get('bot_token')
+                        if token:
+                            bot_tokens.add(token)
+                
+                # Spin up polling loops for new tokens
+                for token in bot_tokens:
+                    if token not in active_tasks or active_tasks[token].done():
+                        active_tasks[token] = asyncio.create_task(self._single_bot_polling_loop(token))
+                
+                # Stop polling loops for removed/disabled tokens
+                for token in list(active_tasks.keys()):
+                    if token not in bot_tokens:
+                        active_tasks[token].cancel()
+                        del active_tasks[token]
+                        
+                await asyncio.sleep(5)
+            except Exception as e:
+                print(f"[Telegram-Control] Error in polling orchestrator: {e}")
+                await asyncio.sleep(5)
+                
+        # Terminate all polling loops on shutdown
+        for task in active_tasks.values():
+            task.cancel()
+
+    async def _single_bot_polling_loop(self, token: str):
+        import httpx
+        last_update_id = 0
+        print(f"[Telegram-Control] Initiating polling listener for token {token[:10]}...")
+        
+        while self._running:
+            try:
+                url = f"https://api.telegram.org/bot{token}/getUpdates"
+                params = {"timeout": 10, "offset": last_update_id}
+                
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(url, params=params, timeout=15.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get('ok'):
+                            for update in data.get('result', []):
+                                update_id = update.get('update_id')
+                                last_update_id = update_id + 1
+                                
+                                message = update.get('message')
+                                if message:
+                                    await self._handle_telegram_message(token, message)
+                    elif resp.status_code == 401:
+                        print(f"[Telegram-Control] Bot token {token[:10]} is unauthorized. Retrying in 30s...")
+                        await asyncio.sleep(30)
+                        
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"[Telegram-Control] Error polling bot {token[:10]}: {e}")
+                await asyncio.sleep(5)
+
+    async def _handle_telegram_message(self, token: str, message: dict):
+        import httpx
+        chat = message.get('chat', {})
+        chat_id = chat.get('id')
+        text = message.get('text', '').strip()
+        from_user = message.get('from', {})
+        username = from_user.get('username') or from_user.get('first_name', 'User')
+        
+        if not chat_id or not text:
+            return
+            
+        print(f"[Telegram-Control] Processing command from @{username}: '{text}'")
+        text_lower = text.lower()
+        
+        # Reply helper
+        async def send_reply(reply_text: str):
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": reply_text,
+                "parse_mode": "HTML"
+            }
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(url, json=payload, timeout=10.0)
+            except Exception as e:
+                print(f"[Telegram-Control] Reply dispatch error: {e}")
+        
+        if text_lower.startswith('/start') or text_lower.startswith('/help'):
+            help_msg = (
+                "🤖 <b>AEGIS Edge Control Center</b>\n"
+                f"Welcome, @{username}! I am your remote surveillance assistant.\n\n"
+                "<b>Monitoring Commands:</b>\n"
+                "• /status — Check system health, storage, and active streams\n"
+                "• /cameras — List configured cameras and online status\n"
+                "• /live or /preview — Generate a secure link to watch feeds on your phone\n"
+                "• /triggers — List visual alert triggers\n\n"
+                "<b>Control Commands:</b>\n"
+                "• /toggle <code>[trigger_id]</code> — Enable or disable a visual trigger\n"
+                "• /prune — Force immediate storage pruning to free up disk space\n"
+            )
+            await send_reply(help_msg)
+            
+        elif text_lower.startswith('/status'):
+            import psutil
+            cpu = psutil.cpu_percent()
+            mem = psutil.virtual_memory().percent
+            
+            from core.storage.storage_manager import get_storage
+            used, total, percentage = get_storage().get_usage()
+            
+            stats = self.get_stats()
+            uptime_days = stats.get('uptime', 0) // 86400
+            uptime_hours = (stats.get('uptime', 0) % 86400) // 3600
+            uptime_mins = (stats.get('uptime', 0) % 3600) // 60
+            
+            status_msg = (
+                "🖥️ <b>AEGIS System Status</b>\n\n"
+                f"<b>Uptime:</b> {uptime_days}d {uptime_hours}h {uptime_mins}m\n"
+                f"<b>CPU Load:</b> {cpu}%\n"
+                f"<b>Memory Load:</b> {mem}%\n"
+                f"<b>Disk Allocation:</b> {used/(1024**3):.2f} / {total/(1024**3):.2f} GB ({percentage}%)\n\n"
+                f"<b>Active Triggers:</b> {stats.get('triggers_active', 0)}\n"
+                f"<b>Alerts Sent:</b> {stats.get('notifications_sent', 0)}\n"
+            )
+            await send_reply(status_msg)
+            
+        elif text_lower.startswith('/cameras'):
+            from core.camera.capture import get_camera_manager
+            cam_mgr = get_camera_manager()
+            cameras = cam_mgr.get_all_cameras()
+            
+            if not cameras:
+                await send_reply("📷 No surveillance cameras configured.")
+                return
+                
+            lines = ["📷 <b>Connected Cameras</b>\n"]
+            for cid, cam in cameras.items():
+                status = cam_mgr.get_source_status(cid)
+                emoji = "🟢" if status == 'connected' else "🟡" if status == 'connecting' else "🔴"
+                lines.append(f"• {emoji} <b>{cam['name']}</b> (ID: {cid}) — <i>{status}</i>")
+            
+            await send_reply("\n".join(lines))
+            
+        elif text_lower.startswith('/live') or text_lower.startswith('/preview') or text_lower.startswith('/stream'):
+            await send_reply("🔄 <i>Establishing secure public tunnel...</i>")
+            
+            tunnel_url = await get_tunnel_manager().get_url()
+            if not tunnel_url:
+                await send_reply("❌ Tunnel connection failed. Ensure system SSH client is functioning.")
+                return
+                
+            from core.camera.capture import get_camera_manager
+            cam_mgr = get_camera_manager()
+            cameras = cam_mgr.get_all_cameras()
+            
+            if not cameras:
+                await send_reply("📷 No cameras configured to preview.")
+                return
+                
+            lines = [
+                "📱 <b>AEGIS Live Phone Preview</b>\n"
+                "Secure temporary links to monitor live camera feeds on the go:\n"
+            ]
+            for cid, cam in cameras.items():
+                lines.append(
+                    f"• <b>{cam['name']}</b>:\n"
+                    f"🔗 <a href='{tunnel_url}/api/cameras/{cid}/stream'>Watch Live stream</a>\n"
+                )
+            lines.append("\n<i>Note: Links will remain active as long as the server is running.</i>")
+            await send_reply("\n".join(lines))
+            
+        elif text_lower.startswith('/triggers'):
+            if not self._triggers:
+                await send_reply("🔔 No visual triggers configured.")
+                return
+                
+            lines = ["🔔 <b>Visual Alerts Triggers</b>\n"]
+            for tid, trig in self._triggers.items():
+                status = "🟢 Enabled" if trig.get('enabled') else "🔴 Disabled"
+                lines.append(
+                    f"• <b>[ID: {tid}] {trig.get('name')}</b>\n"
+                    f"  Condition: <i>\"{trig.get('condition_text')}\"</i>\n"
+                    f"  Status: {status}\n"
+                )
+            await send_reply("\n".join(lines))
+            
+        elif text_lower.startswith('/toggle'):
+            parts = text.split()
+            if len(parts) < 2:
+                await send_reply("⚠️ Specify a trigger ID, e.g., <code>/toggle 1</code>")
+                return
+            try:
+                trigger_id = int(parts[1])
+                if trigger_id not in self._triggers:
+                    await send_reply(f"❌ Trigger ID {trigger_id} not found.")
+                    return
+                
+                trig = self._triggers[trigger_id]
+                new_state = not trig.get('enabled', False)
+                self.toggle_trigger(trigger_id, new_state)
+                
+                status = "🟢 Enabled" if new_state else "🔴 Disabled"
+                await send_reply(f"{status} trigger <b>'{trig['name']}'</b> (ID: {trigger_id}) successfully.")
+            except ValueError:
+                await send_reply("⚠️ Trigger ID must be a number, e.g., <code>/toggle 1</code>")
+                
+        elif text_lower.startswith('/prune') or text_lower.startswith('/clean'):
+            await send_reply("🧹 <i>Pruning oldest surveillance data...</i>")
+            try:
+                from core.storage.storage_manager import get_storage
+                cleaned_bytes = get_storage().clean_old_data()
+                cleaned_mb = cleaned_bytes / (1024**2)
+                await send_reply(f"🧹 <b>Prune Complete!</b>\nFreed <code>{cleaned_mb:.2f} MB</code> of storage space.")
+            except Exception as e:
+                await send_reply(f"❌ Error during storage pruning: {str(e)}")
+        else:
+            await send_reply("❓ Command not recognized. Send /help to see all remote control options.")
+
+
+class TunnelManager:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+        
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._process = None
+        self._url = None
+        self._lock = threading.Lock()
+        self._starting = False
+        
+    async def get_url(self) -> Optional[str]:
+        with self._lock:
+            if self._url and self._process and self._process.poll() is None:
+                return self._url
+            
+            if self._starting:
+                return None
+            self._starting = True
+            
+        try:
+            self._url = await self._start_ssh_tunnel()
+            return self._url
+        finally:
+            self._starting = False
+            
+    async def _start_ssh_tunnel(self) -> Optional[str]:
+        self.stop()
+        
+        import subprocess
+        import re
+        import asyncio
+        
+        print("[Tunnel] Spinning up secure background SSH tunnel to localhost.run...")
+        cmd = [
+            "ssh", 
+            "-o", "StrictHostKeyChecking=no", 
+            "-R", "80:localhost:8000", 
+            "nokey@localhost.run"
+        ]
+        
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            self._process = process
+            
+            loop = asyncio.get_running_loop()
+            url = None
+            start_time = time.time()
+            
+            while time.time() - start_time < 20:
+                line = await loop.run_in_executor(None, process.stdout.readline)
+                if not line:
+                    break
+                line_str = line.strip()
+                print(f"[Tunnel Out] {line_str}")
+                
+                matches = re.findall(r'https?://[a-zA-Z0-9.-]+\.lhr\.life', line_str)
+                if not matches:
+                    matches = re.findall(r'https?://[a-zA-Z0-9.-]+\.lhr\.run', line_str)
+                    
+                if matches:
+                    url = matches[0]
+                    print(f"[Tunnel] Tunnel established at URL: {url}")
+                    break
+                    
+                if process.poll() is not None:
+                    print("[Tunnel] Tunnel connection process terminated early.")
+                    break
+                    
+            return url
+        except Exception as e:
+            print(f"[Tunnel] Error establishing secure tunnel: {e}")
+            return None
+            
+    def stop(self):
+        if self._process:
+            print("[Tunnel] Shutting down secure tunnel...")
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            self._process = None
+            self._url = None
+
+
+_tunnel_manager = None
+
+def get_tunnel_manager() -> TunnelManager:
+    global _tunnel_manager
+    if _tunnel_manager is None:
+        _tunnel_manager = TunnelManager()
+    return _tunnel_manager
 
 
 def get_hermes() -> HermesAgent:

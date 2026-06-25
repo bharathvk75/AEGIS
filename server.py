@@ -497,6 +497,15 @@ def delete_model(provider: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/hermes/tunnel")
+async def get_tunnel():
+    try:
+        from core.agent.hermes import get_tunnel_manager
+        url = await get_tunnel_manager().get_url()
+        return {"url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Hermes Channels Endpoints ---
 @app.get("/api/hermes/channels")
 def list_channels():
