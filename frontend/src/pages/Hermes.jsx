@@ -13,18 +13,29 @@ import {
   Edit2,
   Globe,
   Link2,
-  ExternalLink
+  ExternalLink,
+  Sparkles,
+  Zap,
+  Play,
+  CheckCircle2
 } from 'lucide-react';
 
 export default function Hermes() {
-  const [activeSubTab, setActiveSubTab] = useState('triggers');
+  const [activeSubTab, setActiveSubTab] = useState('triggers'); // triggers, presets, channels
   const [cameras, setCameras] = useState([]);
   const [channels, setChannels] = useState([]);
   const [triggers, setTriggers] = useState([]);
+  const [presets, setPresets] = useState([]);
 
   // Testing states
   const [testingChannelId, setTestingChannelId] = useState(null);
   const [testStatuses, setTestStatuses] = useState({});
+
+  // Interactive AI Tester state
+  const [aiTestCameraId, setAiTestCameraId] = useState('');
+  const [aiTestPrompt, setAiTestPrompt] = useState('Detect if a person is loitering or holding a package.');
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState(null);
 
   // Tunnel states
   const [tunnelUrl, setTunnelUrl] = useState('');
@@ -76,7 +87,6 @@ export default function Hermes() {
   // Validation helper: Check if Telegram Chat ID is non-numeric
   const isTelegramChatIdInvalid = () => {
     if (!telegramChatId) return false;
-    // If it contains any letters or the @ symbol, it is invalid
     return /[a-zA-Z@_]/.test(telegramChatId);
   };
 
@@ -84,6 +94,7 @@ export default function Hermes() {
     fetchCameras();
     fetchChannels();
     fetchTriggers();
+    fetchPresets();
   }, []);
 
   const fetchCameras = async () => {
@@ -92,7 +103,10 @@ export default function Hermes() {
       if (res.ok) {
         const data = await res.json();
         setCameras(data);
-        if (data.length > 0 && !trCameraId) setTrCameraId(data[0].id);
+        if (data.length > 0) {
+          if (!trCameraId) setTrCameraId(data[0].id);
+          if (!aiTestCameraId) setAiTestCameraId(data[0].id);
+        }
       }
     } catch (err) {}
   };
@@ -117,6 +131,69 @@ export default function Hermes() {
     } catch (err) {}
   };
 
+  const fetchPresets = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/triggers/presets');
+      if (res.ok) {
+        const data = await res.json();
+        setPresets(data);
+      }
+    } catch (err) {}
+  };
+
+  const handleApplyPreset = async (preset) => {
+    try {
+      const camera_id = cameras.length > 0 ? cameras[0].id : null;
+      const notification_ids = channels.length > 0 ? [channels[0].id] : [];
+      
+      const res = await fetch('http://localhost:8000/api/triggers/presets/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preset_id: preset.id,
+          camera_id: camera_id,
+          notification_ids: notification_ids
+        })
+      });
+
+      if (res.ok) {
+        alert(`Preset "${preset.name}" applied successfully as active trigger!`);
+        fetchTriggers();
+        setActiveSubTab('triggers');
+      }
+    } catch (err) {
+      alert("Failed to apply preset.");
+    }
+  };
+
+  const handleRunAiTest = async () => {
+    if (!aiTestCameraId || !aiTestPrompt.trim()) return;
+    setAiTesting(true);
+    setAiTestResult(null);
+
+    try {
+      const res = await fetch('http://localhost:8000/api/ai/test-trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera_id: parseInt(aiTestCameraId),
+          condition_text: aiTestPrompt
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setAiTestResult(data);
+      } else {
+        alert("Error testing AI condition against camera feed.");
+      }
+    } catch (err) {
+      alert("Network error running AI test.");
+    } finally {
+      setAiTesting(false);
+    }
+  };
+
   // Channel CRUD & Test
   const handleTestChannel = async (id) => {
     setTestingChannelId(id);
@@ -130,15 +207,9 @@ export default function Hermes() {
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          setTestStatuses(prev => ({ 
-            ...prev, 
-            [id]: 'passed' 
-          }));
+          setTestStatuses(prev => ({ ...prev, [id]: 'passed' }));
         } else {
-          setTestStatuses(prev => ({ 
-            ...prev, 
-            [id]: 'failed' 
-          }));
+          setTestStatuses(prev => ({ ...prev, [id]: 'failed' }));
           alert(`Channel Test Failed:\n\n${data.error || 'Unknown error occurred.'}`);
         }
       } else {
@@ -148,55 +219,46 @@ export default function Hermes() {
       }
     } catch (err) {
       setTestStatuses(prev => ({ ...prev, [id]: 'failed' }));
-      alert(`Channel Test Failed:\n\nNetwork error. Ensure that your backend server is running.`);
     } finally {
       setTestingChannelId(null);
-      setTimeout(() => {
-        setTestStatuses(prev => {
-          const updated = { ...prev };
-          delete updated[id];
-          return updated;
-        });
-      }, 7000);
     }
-  };
-
-  const handleDeleteChannel = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this channel?")) return;
-    try {
-      const res = await fetch(`http://localhost:8000/api/hermes/channels/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        fetchChannels();
-        fetchTriggers();
-        if (editingChannelId === id) {
-          handleCancelChannelEdit();
-        }
-      }
-    } catch (err) {}
   };
 
   const handleEditChannelClick = (ch) => {
     setEditingChannelId(ch.id);
     setChName(ch.name);
     setChType(ch.channel_type);
-    setShowChannelForm(true);
-
-    const config = ch.config || {};
+    
+    const cfg = ch.config || {};
     if (ch.channel_type === 'telegram') {
-      setTelegramToken(config.bot_token || '');
-      setTelegramChatId(config.chat_id || '');
+      setTelegramToken(cfg.bot_token || '');
+      setTelegramChatId(cfg.chat_id || '');
     } else if (ch.channel_type === 'discord') {
-      setDiscordWebhook(config.webhook_url || '');
+      setDiscordWebhook(cfg.webhook_url || '');
     } else if (ch.channel_type === 'webhook') {
-      setWebhookUrl(config.url || '');
+      setWebhookUrl(cfg.url || '');
     } else if (ch.channel_type === 'sms' || ch.channel_type === 'whatsapp') {
-      setTwilioSid(config.account_sid || '');
-      setTwilioToken(config.auth_token || '');
-      setTwilioFrom(config.from || '');
-      setTwilioTo(config.to || '');
+      setTwilioSid(cfg.account_sid || '');
+      setTwilioToken(cfg.auth_token || '');
+      setTwilioFrom(cfg.from || '');
+      setTwilioTo(cfg.to || '');
     }
+    setShowChannelForm(true);
+  };
+
+  const handleDeleteChannel = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this notification channel?")) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/hermes/channels/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchChannels();
+        if (editingChannelId === id) {
+          handleCancelChannelEdit();
+        }
+      }
+    } catch (err) {}
   };
 
   const handleCancelChannelEdit = () => {
@@ -342,8 +404,11 @@ export default function Hermes() {
     <div className="page-container">
       <header className="page-header">
         <div>
-          <h1 className="page-title">Hermes Agent</h1>
-          <p className="page-subtitle">Configure intelligent automation, visual alert triggers, and communication channels</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h1 className="page-title">Hermes Agent</h1>
+            <span className="v2-badge">v2.0 AI Engine</span>
+          </div>
+          <p className="page-subtitle">Configure natural language security triggers, preset rules, and notifications</p>
         </div>
       </header>
 
@@ -353,13 +418,19 @@ export default function Hermes() {
           className={`sub-tab-btn ${activeSubTab === 'triggers' ? 'active' : ''}`}
           onClick={() => setActiveSubTab('triggers')}
         >
-          Visual Triggers
+          Visual Triggers ({triggers.length})
+        </button>
+        <button 
+          className={`sub-tab-btn ${activeSubTab === 'presets' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('presets')}
+        >
+          Preset AI Rules
         </button>
         <button 
           className={`sub-tab-btn ${activeSubTab === 'channels' ? 'active' : ''}`}
           onClick={() => setActiveSubTab('channels')}
         >
-          Notification Channels
+          Notification Channels ({channels.length})
         </button>
       </div>
 
@@ -369,10 +440,10 @@ export default function Hermes() {
           <div>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0, fontSize: '15px', color: 'var(--text-normal)' }}>
               <Globe size={16} className="text-blue" style={{ color: '#3b82f6' }} />
-              <span>AEGIS Live Phone Preview & Control Center</span>
+              <span>AEGIS Live Phone Preview & Remote Control</span>
             </h3>
             <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '4px', maxWidth: '650px', lineHeight: '1.4' }}>
-              Create a temporary secure public link to view live surveillance feeds on your phone and control the AEGIS system remotely via Telegram.
+              Create a secure tunnel link to stream video feeds live to mobile devices and send Telegram remote commands.
             </p>
           </div>
           <button 
@@ -386,35 +457,102 @@ export default function Hermes() {
             <span>{generatingTunnel ? 'Establishing Tunnel...' : tunnelUrl ? 'Refresh Link' : 'Generate Secure Link'}</span>
           </button>
         </div>
+      </div>
 
-        {tunnelUrl && (
-          <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid var(--border-subtle)' }}>
-            <p style={{ fontSize: '12px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-normal)' }}>🌐 Public Live Feeds (Accessible Anywhere):</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
-              {cameras.map(c => (
-                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-inset)', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontSize: '11.5px', fontWeight: '500', color: 'var(--text-normal)' }}>{c.name}</span>
-                  <a 
-                    href={`${tunnelUrl}/api/cameras/${c.id}/stream`} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    style={{ color: '#3b82f6', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', textDecoration: 'none' }}
-                  >
-                    <span>Watch Feed</span>
-                    <ExternalLink size={10} />
-                  </a>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', fontSize: '10.5px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', padding: '8px 10px', borderRadius: '4px' }}>
-              <span>ℹ️</span>
-              <span>
-                Your public URL is: <code>{tunnelUrl}</code>. Use Telegram command <code>/live</code> to send these feeds directly to your phone.
-              </span>
+      {/* --- PRESET RULES TAB --- */}
+      {activeSubTab === 'presets' && (
+        <section className="presets-tab-content">
+          <div className="tab-section-header">
+            <div>
+              <h2>AI Security Presets</h2>
+              <p className="page-subtitle" style={{ margin: 0 }}>Instant one-click security rules powered by Vision LLMs</p>
             </div>
           </div>
-        )}
-      </div>
+
+          <div className="presets-grid">
+            {presets.map(preset => (
+              <div key={preset.id} className="preset-card">
+                <div className="preset-header">
+                  <span className="preset-title">{preset.name}</span>
+                  <span className="preset-category">{preset.category}</span>
+                </div>
+                <p className="preset-desc">{preset.description}</p>
+                <div className="preset-prompt-preview">
+                  "{preset.condition_text}"
+                </div>
+                <button 
+                  className="primary-btn" 
+                  onClick={() => handleApplyPreset(preset)}
+                  style={{ width: '100%', justifyContent: 'center', marginTop: 'auto' }}
+                >
+                  <Plus size={14} />
+                  <span>Apply Preset</span>
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Interactive AI Tester Card */}
+          <div className="admin-form-card" style={{ marginTop: '28px' }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Zap size={16} className="text-amber" />
+              <span>Interactive AI Test Runner</span>
+            </h3>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              Test any custom natural language prompt against your camera feed right now without creating a permanent trigger.
+            </p>
+
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Select Target Camera Feed</label>
+                <select value={aiTestCameraId} onChange={e => setAiTestCameraId(e.target.value)}>
+                  {cameras.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.source_type})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Natural Language Prompt / Condition</label>
+                <input 
+                  type="text" 
+                  value={aiTestPrompt} 
+                  onChange={e => setAiTestPrompt(e.target.value)} 
+                  placeholder="e.g. Detect if someone is opening the door or carrying a box"
+                />
+              </div>
+            </div>
+
+            <div style={{ marginTop: '16px', display: 'flex', gap: '12px' }}>
+              <button 
+                type="button" 
+                className="primary-btn" 
+                onClick={handleRunAiTest} 
+                disabled={aiTesting}
+              >
+                {aiTesting ? <RefreshCw size={14} className="spinner-icon" /> : <Play size={14} />}
+                <span>{aiTesting ? "Analyzing Frame..." : "Run Live AI Evaluation"}</span>
+              </button>
+            </div>
+
+            {aiTestResult && (
+              <div style={{ marginTop: '20px', background: 'rgba(0,0,0,0.3)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <span className={`meta-badge severity ${aiTestResult.severity}`}>
+                    {aiTestResult.triggered ? 'TRIGGERED (ALERT)' : 'NORMAL (NO MATCH)'}
+                  </span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Confidence: {(aiTestResult.confidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+                  <strong>AI Analysis:</strong> {aiTestResult.description}
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* --- VISUAL TRIGGERS TAB --- */}
       {activeSubTab === 'triggers' && (
@@ -449,7 +587,7 @@ export default function Hermes() {
                 </div>
 
                 <div className="form-group">
-                  <label>Surveillance Camera</label>
+                  <label>Target Camera Feed</label>
                   <select value={trCameraId} onChange={e => setTrCameraId(e.target.value)}>
                     <option value="">All Cameras</option>
                     {cameras.map(c => (
@@ -457,124 +595,80 @@ export default function Hermes() {
                     ))}
                   </select>
                 </div>
+              </div>
 
-                <div className="form-group span-all">
-                  <label>Smart Condition (Natural Language Visual Query)</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Detect if a person is in the frame wearing a red jacket, Detect if a vehicle drives through"
-                    value={trCondition}
-                    onChange={e => setTrCondition(e.target.value)}
-                  />
-                  <small className="form-help-text">
-                    vlms evaluate conditions containing keywords like "detect", "identify", "analyze" for detailed vision analysis.
-                  </small>
-                </div>
+              <div className="form-group">
+                <label>Natural Language Condition</label>
+                <textarea 
+                  rows={3}
+                  placeholder="Describe what to monitor (e.g., 'Detect if someone is holding a box or package near the door')"
+                  value={trCondition}
+                  onChange={e => setTrCondition(e.target.value)}
+                />
+              </div>
 
-                <div className="form-group span-all">
-                  <label>Route Alerts to Channels</label>
-                  {channels.length === 0 ? (
-                    <p className="no-channels-warning">Create a notification channel first to link alerts.</p>
-                  ) : (
-                    <div className="channels-selection-checklist">
-                      {channels.map(ch => (
-                        <div 
-                          key={ch.id} 
-                          className={`channel-check-item ${trSelectedChannels.includes(ch.id) ? 'checked' : ''}`}
-                          onClick={() => handleSelectChannel(ch.id)}
-                        >
-                          <div className="checkbox-box">
-                            {trSelectedChannels.includes(ch.id) && <Check size={12} />}
-                          </div>
-                          <span>{ch.name} ({ch.channel_type})</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="form-group">
-                  <div className="checkbox-group">
-                    <input 
-                      type="checkbox" 
-                      id="cap-snapshot" 
-                      checked={trCaptureSnapshot}
-                      onChange={e => setTrCaptureSnapshot(e.target.checked)}
-                    />
-                    <label htmlFor="cap-snapshot">Capture Snapshot on Alert (Vision Proof)</label>
-                  </div>
+              <div className="form-group">
+                <label>Dispatch Notifications To:</label>
+                <div className="channels-selection-grid">
+                  {channels.map(ch => (
+                    <label key={ch.id} className="channel-checkbox-label">
+                      <input 
+                        type="checkbox"
+                        checked={trSelectedChannels.includes(ch.id)}
+                        onChange={() => handleSelectChannel(ch.id)}
+                      />
+                      <span>{ch.name} ({ch.channel_type})</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
-              <div className="form-actions-row">
-                <button type="button" className="text-btn" onClick={handleCancelTriggerEdit}>Cancel</button>
-                <button type="submit" className="primary-btn" disabled={channels.length === 0}>
-                  {editingTriggerId ? 'Save Changes' : 'Save Trigger'}
+              <div className="form-actions">
+                <button type="submit" className="primary-btn">
+                  <span>{editingTriggerId ? "Save Changes" : "Create Trigger"}</span>
+                </button>
+                <button type="button" className="secondary-btn" onClick={handleCancelTriggerEdit}>
+                  Cancel
                 </button>
               </div>
             </form>
           )}
 
-          <div className="triggers-list-grid">
+          <div className="triggers-list">
             {triggers.length === 0 ? (
-              <div className="empty-state-card span-all">
-                <ShieldAlert size={40} className="empty-state-icon" />
-                <h3>No Triggers Configured</h3>
-                <p>Create a visual trigger to start analyzing camera streams for specific activities.</p>
+              <div className="empty-state-card">
+                <ShieldAlert size={36} className="empty-state-icon" />
+                <h3>No Visual Triggers Configured</h3>
+                <p>Use the AI Presets tab or create a natural language rule above to start edge video analytics.</p>
               </div>
             ) : (
               triggers.map(tr => (
-                <div key={tr.id} className={`trigger-admin-card ${tr.enabled ? '' : 'inactive'}`}>
-                  <div className="trigger-card-top">
-                    <div className="trigger-title-block">
-                      <h4>{tr.name}</h4>
-                      <span className="trigger-camera-assoc">
-                        Camera: {cameras.find(c => c.id === tr.camera_id)?.name || 'All Cameras'}
+                <div key={tr.id} className="trigger-card">
+                  <div className="trigger-card-header">
+                    <div className="trigger-info">
+                      <span className="trigger-name">{tr.name}</span>
+                      <span className="trigger-camera">
+                        Target: {tr.camera_id ? cameras.find(c => c.id === tr.camera_id)?.name || `Camera #${tr.camera_id}` : 'All Feeds'}
                       </span>
                     </div>
-                    <div className="trigger-card-controls">
+                    <div className="trigger-card-actions">
                       <button 
-                        className="delete-icon-btn"
-                        onClick={() => handleEditTriggerClick(tr)}
-                        title="Edit Trigger"
-                        style={{ marginRight: '6px' }}
-                      >
-                        <Edit2 size={13} />
-                      </button>
-                      <button 
-                        className="toggle-active-btn"
+                        className="toggle-switch-btn"
                         onClick={() => handleToggleTrigger(tr)}
                         title={tr.enabled ? "Disable Trigger" : "Enable Trigger"}
                       >
-                        {tr.enabled ? <ToggleRight size={24} className="toggle-icon green" /> : <ToggleLeft size={24} className="toggle-icon" />}
+                        {tr.enabled ? <ToggleRight size={24} className="text-green" /> : <ToggleLeft size={24} className="text-muted" />}
                       </button>
-                      <button 
-                        className="delete-icon-btn"
-                        onClick={() => handleDeleteTrigger(tr.id)}
-                        title="Delete Trigger"
-                      >
+                      <button className="icon-btn edit" onClick={() => handleEditTriggerClick(tr)}>
+                        <Edit2 size={14} />
+                      </button>
+                      <button className="icon-btn delete" onClick={() => handleDeleteTrigger(tr.id)}>
                         <Trash2 size={14} />
                       </button>
                     </div>
                   </div>
 
-                  <div className="trigger-card-body">
-                    <p className="trigger-condition-expr">"{tr.condition_text}"</p>
-                    
-                    <div className="trigger-destinations">
-                      <span className="dest-title">Alert Targets:</span>
-                      {tr.notification_ids.length === 0 ? (
-                        <span className="dest-none">None linked</span>
-                      ) : (
-                        <div className="dest-badges">
-                          {tr.notification_ids.map(nid => {
-                            const name = channels.find(c => c.id === nid)?.name || `Channel #${nid}`;
-                            return <span key={nid} className="dest-badge">{name}</span>;
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <p className="trigger-condition">"{tr.condition_text}"</p>
                 </div>
               ))
             )}
@@ -586,7 +680,7 @@ export default function Hermes() {
       {activeSubTab === 'channels' && (
         <section className="channels-tab-content">
           <div className="tab-section-header">
-            <h2>Alert Channels</h2>
+            <h2>Notification Dispatchers</h2>
             <button 
               className="primary-btn" 
               onClick={() => {
@@ -608,200 +702,122 @@ export default function Hermes() {
                   <label>Channel Name</label>
                   <input 
                     type="text" 
-                    placeholder="e.g. My Telegram Bot, Security Discord"
+                    placeholder="e.g. Personal Telegram, Security Discord"
                     value={chName}
                     onChange={e => setChName(e.target.value)}
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Channel Type</label>
+                  <label>Channel Provider</label>
                   <select value={chType} onChange={e => setChType(e.target.value)}>
                     <option value="telegram">Telegram Bot</option>
                     <option value="discord">Discord Webhook</option>
-                    <option value="whatsapp">WhatsApp (Twilio)</option>
-                    <option value="sms">SMS Text (Twilio)</option>
-                    <option value="webhook">Custom API Webhook</option>
+                    <option value="webhook">Custom HTTP Webhook</option>
+                    <option value="sms">Twilio SMS</option>
+                    <option value="whatsapp">Twilio WhatsApp</option>
                   </select>
                 </div>
-
-                {/* Telegram Fields with numeric validation warning */}
-                {chType === 'telegram' && (
-                  <>
-                    <div className="form-group">
-                      <label>Bot Token</label>
-                      <input 
-                        type="password" 
-                        placeholder="e.g. 123456:ABC-DEF"
-                        value={telegramToken}
-                        onChange={e => setTelegramToken(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Chat ID (Numeric Only)</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. 987654321"
-                        value={telegramChatId}
-                        onChange={e => setTelegramChatId(e.target.value)}
-                      />
-                      {isTelegramChatIdInvalid() && (
-                        <div className="alert alert-info" style={{ marginTop: '6px', padding: '8px 12px', fontSize: '11px', lineHeight: '1.4', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: 'var(--text-normal)' }}>
-                          <AlertCircle size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom', color: '#3b82f6' }} />
-                          <strong>Telegram Username Detected!</strong> We will automatically resolve this to your numeric Chat ID when you click Save or Test.
-                          <br />
-                          <em>Note: You MUST send a message (e.g. <code>/start</code>) to your bot in Telegram first so the bot can discover you.</em>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {/* Discord Fields */}
-                {chType === 'discord' && (
-                  <div className="form-group span-all">
-                    <label>Discord Webhook URL</label>
-                    <input 
-                      type="password" 
-                      placeholder="https://discord.com/api/webhooks/..."
-                      value={discordWebhook}
-                      onChange={e => setDiscordWebhook(e.target.value)}
-                    />
-                  </div>
-                )}
-
-                {/* Custom Webhook */}
-                {chType === 'webhook' && (
-                  <div className="form-group span-all">
-                    <label>Custom Endpoint URL (POST)</label>
-                    <input 
-                      type="text" 
-                      placeholder="https://myapi.com/aegis-alerts"
-                      value={webhookUrl}
-                      onChange={e => setWebhookUrl(e.target.value)}
-                    />
-                  </div>
-                )}
-
-                {/* Twilio SMS / WhatsApp Fields */}
-                {(chType === 'sms' || chType === 'whatsapp') && (
-                  <>
-                    <div className="form-group">
-                      <label>Twilio Account SID</label>
-                      <input 
-                        type="text" 
-                        placeholder="AC..."
-                        value={twilioSid}
-                        onChange={e => setTwilioSid(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Twilio Auth Token</label>
-                      <input 
-                        type="password" 
-                        value={twilioToken}
-                        onChange={e => setTwilioToken(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Twilio Number (From)</label>
-                      <input 
-                        type="text" 
-                        placeholder="+1234567890"
-                        value={twilioFrom}
-                        onChange={e => setTwilioFrom(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Your Phone Number (To)</label>
-                      <input 
-                        type="text" 
-                        placeholder="+1987654321"
-                        value={twilioTo}
-                        onChange={e => setTwilioTo(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-
               </div>
 
-              <div className="form-actions-row">
-                <button type="button" className="text-btn" onClick={handleCancelChannelEdit}>Cancel</button>
+              {chType === 'telegram' && (
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label>Bot Token</label>
+                    <input 
+                      type="password" 
+                      placeholder="123456789:ABCdef..." 
+                      value={telegramToken}
+                      onChange={e => setTelegramToken(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Chat ID or Telegram Username</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. @your_username or 12345678" 
+                      value={telegramChatId}
+                      onChange={e => setTelegramChatId(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {chType === 'discord' && (
+                <div className="form-group">
+                  <label>Discord Webhook URL</label>
+                  <input 
+                    type="text" 
+                    placeholder="https://discord.com/api/webhooks/..." 
+                    value={discordWebhook}
+                    onChange={e => setDiscordWebhook(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {chType === 'webhook' && (
+                <div className="form-group">
+                  <label>Target HTTP Webhook Endpoint</label>
+                  <input 
+                    type="text" 
+                    placeholder="https://api.yourdomain.com/alerts" 
+                    value={webhookUrl}
+                    onChange={e => setWebhookUrl(e.target.value)}
+                  />
+                </div>
+              )}
+
+              <div className="form-actions">
                 <button type="submit" className="primary-btn">
-                  {editingChannelId ? 'Save Changes' : 'Save Channel'}
+                  <span>{editingChannelId ? "Save Changes" : "Save Channel"}</span>
+                </button>
+                <button type="button" className="secondary-btn" onClick={handleCancelChannelEdit}>
+                  Cancel
                 </button>
               </div>
             </form>
           )}
 
-          <div className="channels-list-grid">
-            {channels.length === 0 ? (
-              <div className="empty-state-card span-all">
-                <BellRing size={40} className="empty-state-icon" />
-                <h3>No Channels Configured</h3>
-                <p>Add a notification channel to receive smart edge alerts directly on your device.</p>
-              </div>
-            ) : (
-              channels.map(ch => (
-                <div key={ch.id} className="channel-admin-card">
-                  <div className="channel-card-top">
-                    <div className="channel-title-block">
-                      <h4>{ch.name}</h4>
-                      <span className="channel-type-badge">{ch.channel_type.toUpperCase()}</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button 
-                        className="delete-icon-btn"
-                        onClick={() => handleEditChannelClick(ch)}
-                        title="Edit Channel"
-                      >
-                        <Edit2 size={13} />
-                      </button>
-                      <button 
-                        className="delete-icon-btn"
-                        onClick={() => handleDeleteChannel(ch.id)}
-                        title="Delete Channel"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
+          <div className="channels-grid">
+            {channels.map(ch => (
+              <div key={ch.id} className="channel-card">
+                <div className="channel-card-header">
+                  <div className="channel-identity">
+                    <BellRing size={18} className="text-teal" />
+                    <span className="channel-name">{ch.name}</span>
                   </div>
-
-                  <div className="channel-card-stats-row">
-                    <div className="stat-pill">Sent: {ch.stats?.sent ?? 0}</div>
-                    <div className="stat-pill">Failed: {ch.stats?.failed ?? 0}</div>
-                  </div>
-
-                  <div className="channel-card-footer">
+                  <div className="channel-actions">
                     <button 
-                      className={`test-channel-btn ${testStatuses[ch.id] || ''}`}
+                      className="secondary-btn small"
                       onClick={() => handleTestChannel(ch.id)}
-                      disabled={testingChannelId !== null}
+                      disabled={testingChannelId === ch.id}
                     >
-                      {testStatuses[ch.id] === 'testing' ? (
+                      {testingChannelId === ch.id ? (
                         <RefreshCw size={12} className="spinner-icon" />
-                      ) : testStatuses[ch.id] === 'passed' ? (
-                        <Check size={12} />
-                      ) : testStatuses[ch.id] === 'failed' ? (
-                        <AlertCircle size={12} />
                       ) : (
                         <Send size={12} />
                       )}
-                      <span>
-                        {testStatuses[ch.id] === 'testing' 
-                          ? 'Sending...' 
-                          : testStatuses[ch.id] === 'passed' 
-                          ? 'Test Passed!' 
-                          : testStatuses[ch.id] === 'failed' 
-                          ? 'Test Failed' 
-                          : 'Test Channel'}
-                      </span>
+                      <span>Test Alert</span>
+                    </button>
+                    <button className="icon-btn edit" onClick={() => handleEditChannelClick(ch)}>
+                      <Edit2 size={14} />
+                    </button>
+                    <button className="icon-btn delete" onClick={() => handleDeleteChannel(ch.id)}>
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 </div>
-              ))
-            )}
+
+                <div className="channel-details">
+                  <span className="type-badge">{ch.channel_type.toUpperCase()}</span>
+                  <div className="channel-stats">
+                    <span>Sent: {ch.stats?.sent ?? 0}</span>
+                    <span>&bull;</span>
+                    <span>Failed: {ch.stats?.failed ?? 0}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}

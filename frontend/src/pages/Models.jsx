@@ -240,7 +240,10 @@ export default function Models() {
     <div className="page-container">
       <header className="page-header">
         <div>
-          <h1 className="page-title">AI Models</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h1 className="page-title">AI Models</h1>
+            <span className="v2-badge">v2.0 AI Router</span>
+          </div>
           <p className="page-subtitle">Configure Vision-Language Models (VLM) for smart image analysis and object detection</p>
         </div>
       </header>

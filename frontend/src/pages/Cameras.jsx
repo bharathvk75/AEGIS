@@ -181,7 +181,10 @@ export default function Cameras() {
     <div className="page-container">
       <header className="page-header">
         <div>
-          <h1 className="page-title">Cameras</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h1 className="page-title">Cameras</h1>
+            <span className="v2-badge">v2.0 Streams</span>
+          </div>
           <p className="page-subtitle">Configure webcam inputs, RTSP network streams, and local video sources</p>
         </div>
         <div className="header-actions">

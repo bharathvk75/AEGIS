@@ -32,7 +32,12 @@ export default function Sidebar({
       <div className="sidebar-header">
         <div className="logo-container">
           <Shield className="logo-icon" size={24} />
-          {!isCollapsed && <span className="logo-text">AEGIS</span>}
+          {!isCollapsed && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="logo-text">AEGIS</span>
+              <span className="v2-badge">v2.0</span>
+            </div>
+          )}
         </div>
         <button 
           className="collapse-btn" 

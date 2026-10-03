@@ -89,6 +89,16 @@ class StorageConfigUpdate(BaseModel):
     clips_days: int
     logs_days: int
 
+class PresetApplyRequest(BaseModel):
+    preset_id: str
+    camera_id: Optional[int] = None
+    notification_ids: List[int] = []
+
+class TestTriggerRequest(BaseModel):
+    camera_id: int
+    condition_text: str
+
+
 # --- Live Streaming Utility ---
 def generate_mjpeg_stream(camera_id: int):
     cam_mgr = get_camera_manager()
@@ -657,6 +667,113 @@ def update_trigger(id: int, tg_data: TriggerCreate):
         }
         hermes.update_trigger(id, trigger_dict)
         return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- AEGIS V2 Presets & AI Tester Endpoints ---
+@app.get("/api/triggers/presets")
+def list_trigger_presets():
+    from core.agent.presets import PRESET_TRIGGERS
+    return PRESET_TRIGGERS
+
+@app.post("/api/triggers/presets/apply")
+def apply_trigger_preset(req: PresetApplyRequest):
+    from core.agent.presets import PRESET_TRIGGERS
+    preset = next((p for p in PRESET_TRIGGERS if p["id"] == req.preset_id), None)
+    if not preset:
+        raise HTTPException(status_code=404, detail="Preset not found")
+        
+    try:
+        hermes = get_hermes()
+        trigger_dict = {
+            "name": preset["name"],
+            "camera_id": req.camera_id,
+            "condition_text": preset["condition_text"],
+            "notification_ids": req.notification_ids,
+            "enabled": True,
+            "capture_snapshot": preset.get("capture_snapshot", True),
+            "capture_clip": preset.get("capture_clip", False),
+            "clip_duration": 30
+        }
+        trigger_id = hermes.add_trigger(trigger_dict)
+        return {"success": True, "id": trigger_id, "preset_applied": preset["name"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/ai/test-trigger")
+async def test_ai_trigger(req: TestTriggerRequest):
+    cam_mgr = get_camera_manager()
+    frame_jpeg = cam_mgr.get_frame_jpeg(req.camera_id)
+    if not frame_jpeg:
+        return {
+            "triggered": False,
+            "confidence": 0.0,
+            "description": "Camera feed offline or frame not available for analysis.",
+            "severity": "info"
+        }
+    
+    try:
+        from core.ai.llm_clients import get_llm_manager
+        llm = get_llm_manager()
+        
+        prompt = (
+            f"Analyze this camera frame to evaluate security condition: '{req.condition_text}'.\n"
+            f"Respond strictly in JSON format with:\n"
+            f'{{"triggered": true/false, "confidence": 0.0-1.0, "severity": "info"/"warning"/"critical", "description": "detailed observations"}}\n'
+        )
+        
+        response_text = await llm.analyze_image(frame_jpeg, prompt)
+        
+        # Parse json response
+        import json, re
+        match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if match:
+            parsed = json.loads(match.group(0))
+            return parsed
+        return {
+            "triggered": False,
+            "confidence": 0.5,
+            "description": response_text,
+            "severity": "info"
+        }
+    except Exception as e:
+        return {
+            "triggered": False,
+            "confidence": 0.0,
+            "description": f"AI test failed: {str(e)}",
+            "severity": "info"
+        }
+
+@app.get("/api/system/metrics")
+def get_system_metrics():
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        mem = psutil.virtual_memory()
+        
+        storage = get_storage()
+        used, total, pct = storage.get_usage()
+        
+        hermes = get_hermes()
+        h_stats = hermes.get_stats()
+        
+        cam_mgr = get_camera_manager()
+        cameras = cam_mgr.get_all_cameras()
+        active_cams = sum(1 for cid in cameras if cam_mgr.get_source_status(cid) == 'connected')
+        
+        return {
+            "cpu_percent": cpu_percent,
+            "memory_percent": mem.percent,
+            "memory_used_gb": round(mem.used / (1024**3), 2),
+            "memory_total_gb": round(mem.total / (1024**3), 2),
+            "storage_used_gb": round(used / (1024**3), 2),
+            "storage_total_gb": round(total / (1024**3), 2),
+            "storage_percent": pct,
+            "active_cameras": active_cams,
+            "total_cameras": len(cameras),
+            "hermes_uptime": h_stats.get("uptime", 0),
+            "triggers_count": h_stats.get("triggers_active", 0),
+            "notifications_sent": h_stats.get("notifications_sent", 0)
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

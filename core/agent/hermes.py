@@ -740,6 +740,20 @@ class HermesAgent:
                 event_context['frame_data'],
                 {'trigger_id': trigger['id'], 'trigger_name': trigger['name']}
             )
+            if snapshot_path:
+                try:
+                    from core.utils.annotation import annotate_snapshot
+                    annotate_snapshot(
+                        image_input=str(snapshot_path),
+                        output_path=str(snapshot_path),
+                        camera_name=event_context.get('camera_name', 'Camera'),
+                        trigger_name=trigger.get('name', 'Trigger'),
+                        confidence=result.get('confidence', 0.85),
+                        severity=result.get('severity', 'info'),
+                        description=result.get('description', '')
+                    )
+                except Exception as ann_err:
+                    print(f"[AEGIS V2] Snapshot annotation warning: {ann_err}")
         
         event_context_with_paths = {
             **event_context,

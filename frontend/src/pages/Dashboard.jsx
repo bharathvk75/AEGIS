@@ -9,7 +9,14 @@ import {
   Trash2,
   AlertCircle,
   CheckCircle,
-  Info
+  Info,
+  Grid,
+  Volume2,
+  VolumeX,
+  Cpu,
+  HardDrive,
+  Layers,
+  Sparkles
 } from 'lucide-react';
 
 export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
@@ -17,26 +24,48 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
   const [events, setEvents] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState(null);
+  const [gridLayout, setGridLayout] = useState('grid-auto'); // grid-1, grid-2, grid-auto
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [metrics, setMetrics] = useState(null);
 
-  // Fetch cameras and recent events
+  // Fetch cameras, recent events, and system metrics
   useEffect(() => {
     fetchCameras();
     fetchEvents();
+    fetchMetrics();
     
     const interval = setInterval(() => {
       fetchCameras();
-    }, 5000); // Poll cameras status every 5s
+      fetchMetrics();
+    }, 4000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // Sync real-time events from App WebSocket
+  // Sync real-time events from App WebSocket with optional audio alert
   useEffect(() => {
     if (socketEvents.length > 0) {
       const newEvent = socketEvents[0];
       setEvents(prev => [newEvent, ...prev].slice(0, 50));
+
+      if (soundEnabled && (newEvent.severity === 'critical' || newEvent.severity === 'warning')) {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(newEvent.severity === 'critical' ? 880 : 587.33, ctx.currentTime);
+          gain.gain.setValueAtTime(0.1, ctx.currentTime);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.25);
+        } catch (e) {
+          // Audio context suppressed by browser policy if unclicked
+        }
+      }
     }
-  }, [socketEvents]);
+  }, [socketEvents, soundEnabled]);
 
   const fetchCameras = async () => {
     try {
@@ -62,12 +91,23 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
     }
   };
 
+  const fetchMetrics = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/system/metrics');
+      if (res.ok) {
+        const data = await res.json();
+        setMetrics(data);
+      }
+    } catch (err) {
+      console.error("Error fetching metrics:", err);
+    }
+  };
+
   const clearEvents = () => {
     setEvents([]);
     setSocketEvents([]);
   };
 
-  // Helper to format seconds to human-readable uptime
   const formatUptime = (seconds) => {
     if (!seconds) return '0m';
     const d = Math.floor(seconds / (3600 * 24));
@@ -81,7 +121,6 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
     return parts.join(' ');
   };
 
-  // Severity style helper
   const getSeverityClass = (sev) => {
     switch (sev?.toLowerCase()) {
       case 'critical': return 'severity-critical';
@@ -103,56 +142,94 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
       {/* Dashboard Header */}
       <header className="page-header">
         <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">Real-time edge surveillance and security metrics</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h1 className="page-title">Dashboard</h1>
+            <span className="v2-badge">v2.0 HUD</span>
+          </div>
+          <p className="page-subtitle">Real-time edge video intelligence & AI multi-stream monitor</p>
         </div>
-        <div className="live-status-badge">
-          <div className="pulsing-dot green" />
-          <span className="live-badge-text">LIVE MONITORING</span>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button 
+            className="grid-btn"
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            title={soundEnabled ? "Mute alert chime" : "Enable alert chime"}
+            style={{ padding: '8px 14px', borderRadius: '8px' }}
+          >
+            {soundEnabled ? <Volume2 size={16} className="text-teal" /> : <VolumeX size={16} className="text-muted" />}
+            <span>{soundEnabled ? "Audio Alert ON" : "Muted"}</span>
+          </button>
+          
+          <div className="live-status-badge">
+            <div className="pulsing-dot green" />
+            <span className="live-badge-text">HERMES ENGINE ONLINE</span>
+          </div>
         </div>
       </header>
 
-      {/* Stats Grid */}
-      <section className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon-wrapper blue">
-            <Video size={20} />
+      {/* AEGIS V2 Real-Time Hardware & AI Gauges */}
+      <section className="metrics-bar-container">
+        <div className="metric-gauge-card">
+          <div className="metric-gauge-header">
+            <span>CPU Load</span>
+            <Cpu size={14} className="text-blue" />
           </div>
-          <div className="stat-details">
-            <span className="stat-value">{stats?.cameras?.active ?? 0}/{stats?.cameras?.total ?? 0}</span>
-            <span className="stat-label">Active Cameras</span>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon-wrapper teal">
-            <Activity size={20} />
-          </div>
-          <div className="stat-details">
-            <span className="stat-value">{events.length}</span>
-            <span className="stat-label">Events Logged</span>
+          <div className="metric-gauge-val">{metrics?.cpu_percent ?? stats?.cpu_percent ?? 0}%</div>
+          <div className="progress-track">
+            <div 
+              className="progress-fill blue" 
+              style={{ width: `${metrics?.cpu_percent ?? stats?.cpu_percent ?? 0}%` }} 
+            />
           </div>
         </div>
 
-        <div className="stat-card">
-          <div className="stat-icon-wrapper red">
-            <AlertTriangle size={20} />
+        <div className="metric-gauge-card">
+          <div className="metric-gauge-header">
+            <span>RAM Usage</span>
+            <Layers size={14} className="text-purple" />
           </div>
-          <div className="stat-details">
-            <span className="stat-value">
-              {events.filter(e => e.severity === 'critical' || e.severity === 'warning').length}
-            </span>
-            <span className="stat-label">Active Alerts</span>
+          <div className="metric-gauge-val">
+            {metrics?.memory_percent ?? stats?.memory_percent ?? 0}% ({metrics?.memory_used_gb ?? 0}GB)
+          </div>
+          <div className="progress-track">
+            <div 
+              className="progress-fill purple" 
+              style={{ width: `${metrics?.memory_percent ?? stats?.memory_percent ?? 0}%` }} 
+            />
           </div>
         </div>
 
-        <div className="stat-card">
-          <div className="stat-icon-wrapper green">
-            <Clock size={20} />
+        <div className="metric-gauge-card">
+          <div className="metric-gauge-header">
+            <span>Disk Volume</span>
+            <HardDrive size={14} className="text-green" />
           </div>
-          <div className="stat-details">
-            <span className="stat-value">{formatUptime(stats?.hermes?.uptime)}</span>
-            <span className="stat-label">System Uptime</span>
+          <div className="metric-gauge-val">
+            {metrics?.storage_percent ?? stats?.storage?.percentage ?? 0}% ({metrics?.storage_used_gb ?? 0}GB)
+          </div>
+          <div className="progress-track">
+            <div 
+              className="progress-fill green" 
+              style={{ width: `${metrics?.storage_percent ?? stats?.storage?.percentage ?? 0}%` }} 
+            />
+          </div>
+        </div>
+
+        <div className="metric-gauge-card">
+          <div className="metric-gauge-header">
+            <span>Active Feeds</span>
+            <Video size={14} className="text-amber" />
+          </div>
+          <div className="metric-gauge-val">
+            {metrics?.active_cameras ?? stats?.cameras?.active ?? 0}/{metrics?.total_cameras ?? stats?.cameras?.total ?? 0}
+          </div>
+          <div className="progress-track">
+            <div 
+              className="progress-fill amber" 
+              style={{ 
+                width: `${((metrics?.active_cameras || 1) / (metrics?.total_cameras || 1)) * 100}%` 
+              }} 
+            />
           </div>
         </div>
       </section>
@@ -160,21 +237,48 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
       {/* Main Grid Content */}
       <div className="dashboard-content-layout">
         
-        {/* Left Column: Camera Feeds */}
+        {/* Left Column: Camera Feeds with Grid Layout Switcher */}
         <section className="camera-feeds-section">
           <div className="section-header-row">
-            <h2>Camera Feeds</h2>
-            <span className="section-meta">{cameras.length} source{cameras.length !== 1 ? 's' : ''}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <h2>Live Camera Grid</h2>
+              <span className="section-meta">{cameras.length} feed{cameras.length !== 1 ? 's' : ''}</span>
+            </div>
+
+            {/* Grid Layout Switcher */}
+            <div className="grid-controls">
+              <button 
+                className={`grid-btn ${gridLayout === 'grid-1' ? 'active' : ''}`}
+                onClick={() => setGridLayout('grid-1')}
+                title="Single Large Feed"
+              >
+                1x1
+              </button>
+              <button 
+                className={`grid-btn ${gridLayout === 'grid-2' ? 'active' : ''}`}
+                onClick={() => setGridLayout('grid-2')}
+                title="2x2 Grid View"
+              >
+                2x2
+              </button>
+              <button 
+                className={`grid-btn ${gridLayout === 'grid-auto' ? 'active' : ''}`}
+                onClick={() => setGridLayout('grid-auto')}
+                title="Responsive Multi-Grid"
+              >
+                Auto Grid
+              </button>
+            </div>
           </div>
 
           {cameras.length === 0 ? (
             <div className="empty-state-card">
               <Video size={40} className="empty-state-icon" />
               <h3>No Camera Feeds Connected</h3>
-              <p>Add integrated webcams, RTSP streams, or local files in the Cameras page to begin monitoring.</p>
+              <p>Add webcams, RTSP streams, or local files in the Cameras page to begin monitoring.</p>
             </div>
           ) : (
-            <div className="camera-grid">
+            <div className={`camera-grid-layout ${gridLayout}`}>
               {cameras.map(cam => (
                 <div key={cam.id} className="camera-tile">
                   <div className="camera-tile-header">
@@ -187,7 +291,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
                         <button 
                           className="tile-action-btn"
                           onClick={() => setSelectedCamera(cam)}
-                          title="Expand Stream"
+                          title="Expand Fullscreen Stream"
                         >
                           <Maximize2 size={12} />
                         </button>
@@ -206,12 +310,12 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
                       ) : (
                         <div className="feed-placeholder loading">
                           <div className="spinner" />
-                          <span>Connecting Stream...</span>
+                          <span>Connecting Edge Stream...</span>
                         </div>
                       )
                     ) : (
                       <div className="feed-placeholder disabled">
-                        <span>Camera Disabled</span>
+                        <span>Camera Feed Disabled</span>
                       </div>
                     )}
                   </div>
@@ -224,7 +328,10 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
         {/* Right Column: Event Feed */}
         <section className="event-feed-section">
           <div className="section-header-row">
-            <h2>Event Feed</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2>Live Event Stream</h2>
+              <Sparkles size={14} className="text-amber" />
+            </div>
             <button className="clear-btn" onClick={clearEvents} title="Clear logs">
               <Trash2 size={14} />
               <span>Clear</span>
@@ -235,7 +342,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
             {events.length === 0 ? (
               <div className="empty-events">
                 <Activity size={24} className="empty-events-icon" />
-                <span>No events recorded today</span>
+                <span>No events recorded. Hermes AI is actively scanning camera feeds.</span>
               </div>
             ) : (
               <div className="event-list">
@@ -245,7 +352,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
                       {getSeverityIcon(ev.severity)}
                       <div className="event-details">
                         <div className="event-main-line">
-                          <span className="event-source">{ev.camera_name || 'System'}:</span>
+                          <span className="event-source">{ev.camera_name || 'Camera'}:</span>
                           <span className="event-desc">{ev.description || ev.event_type}</span>
                         </div>
                         <div className="event-meta-line">
@@ -254,7 +361,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
                           </span>
                           {ev.confidence > 0 && (
                             <span className="event-conf">
-                              &bull;&nbsp;&nbsp;{(ev.confidence * 100).toFixed(0)}% Confidence
+                              &bull;&nbsp;&nbsp;{(ev.confidence * 100).toFixed(0)}% AI Conf.
                             </span>
                           )}
                         </div>
@@ -264,10 +371,10 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
                       <button 
                         className="view-snapshot-btn" 
                         onClick={() => setSelectedSnapshot(ev.snapshot_path)}
-                        title="View Snapshot"
+                        title="View Annotated Vision Snapshot"
                       >
                         <Eye size={12} />
-                        <span>Vision</span>
+                        <span>HUD Vision</span>
                       </button>
                     )}
                   </div>
@@ -286,7 +393,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
             <div className="modal-header">
               <div className="modal-title-row">
                 <div className={`status-indicator-dot ${selectedCamera.status === 'connected' ? 'green' : 'red'}`} />
-                <h3>{selectedCamera.name} — Live Analytics Stream</h3>
+                <h3>{selectedCamera.name} — AEGIS V2 Live Feed</h3>
               </div>
               <button className="modal-close-btn" onClick={() => setSelectedCamera(null)}>&times;</button>
             </div>
@@ -301,7 +408,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
               <div className="expanded-video-details">
                 <div className="info-badge">Source: {selectedCamera.source_type.toUpperCase()}</div>
                 <div className="info-badge">Configured FPS: {selectedCamera.fps}</div>
-                <div className="info-badge">Location: Edge Processor</div>
+                <div className="info-badge">Engine: Hermes Edge V2</div>
               </div>
             </div>
           </div>
@@ -313,7 +420,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
         <div className="modal-backdrop" onClick={() => setSelectedSnapshot(null)}>
           <div className="modal-content medium-view" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Hermes Vision Snapshot</h3>
+              <h3>AEGIS V2 HUD Vision Snapshot</h3>
               <button className="modal-close-btn" onClick={() => setSelectedSnapshot(null)}>&times;</button>
             </div>
             <div className="modal-body snapshot-body">
@@ -323,7 +430,7 @@ export default function Dashboard({ stats, socketEvents, setSocketEvents }) {
                 className="vision-snapshot-large"
               />
               <div className="snapshot-footer-meta">
-                <span>Alert Snapshot captured at Edge. Fully private local storage.</span>
+                <span>Annotated event snapshot processed by AEGIS Edge V2 engine.</span>
               </div>
             </div>
           </div>
